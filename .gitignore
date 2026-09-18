@@ -1,0 +1,8 @@
+build/
+*.tos
+*.prg
+*.o
+*.elf
+*.map
+*.log
+*.cfg
