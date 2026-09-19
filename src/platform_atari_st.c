@@ -53,6 +53,8 @@ typedef struct DirtyRect {
     short y1;
 } DirtyRect;
 
+extern void st_draw_rocks(GameState *state, unsigned char *buffer, DirtyRect *rects, int *count, unsigned char *full, long max_rects);
+
 static unsigned char screen_storage[2][SCREEN_BYTES + 255];
 static unsigned char *screen_pages[2];
 static unsigned char *draw_buffer;
@@ -235,6 +237,26 @@ void platform_begin_frame(void) {
 void platform_clear_field(void *context) {
     (void) context;
     st_clear_rect(draw_buffer, FIELD_GROUP0, FIELD_GROUP1, FIELD_Y0, FIELD_Y1);
+}
+
+void platform_draw_rocks(void *context, GameState *state) {
+    const int page = page_index();
+
+    (void) context;
+    st_draw_rocks(state, draw_buffer, dirty_rects[page], &dirty_count[page], &dirty_full[page], MAX_DIRTY_RECTS);
+}
+
+int platform_dirty_count(void) {
+    return dirty_count[page_index()];
+}
+
+void platform_dirty_get(int index, short *out) {
+    const DirtyRect *rect = &dirty_rects[page_index()][index];
+
+    out[0] = rect->x0;
+    out[1] = rect->y0;
+    out[2] = rect->x1;
+    out[3] = rect->y1;
 }
 
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1) {
@@ -420,6 +442,12 @@ static void build_rock_cache(int16_t *cache, const int8_t *off_x, const int8_t *
         ++edges;
     }
     cache[0] = (int16_t) (edges - 1);
+}
+
+/* Called from st_rocks.S when a rock's prepared edge list is out of date. */
+void platform_prepare_rock(GameAsteroid *asteroid) {
+    build_rock_cache((int16_t *) asteroid->draw_cache, asteroid->off_x, asteroid->off_y, asteroid->draw_count);
+    asteroid->draw_cache_valid = 1;
 }
 
 /* colour must be one of 1, 2, 4, 8 and the outline must lie inside the field */

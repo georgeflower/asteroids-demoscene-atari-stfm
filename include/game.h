@@ -122,6 +122,7 @@ typedef struct GameAsteroid {
     uint8_t cache_index;
     uint8_t cache_valid;
     uint8_t draw_count;  /* vertices of the cached outline (small rocks are drawn with fewer) */
+    uint8_t render_pending;                         /* set by a rocks drawer for rocks it left to game_render */
     uint8_t draw_cache_valid;                       /* the platform's own prepared form of the outline, below */
     uint16_t draw_cache[GAME_DRAW_CACHE_WORDS];
 } GameAsteroid;
@@ -290,6 +291,12 @@ typedef void (*GameOffsetPolygonDrawer)(void *context, int center_x, int center_
                                         const int8_t *off_y, int count, uint8_t color, void *cache,
                                         uint8_t *cache_valid);
 
+/* Optional, the fast route for all the rocks at once (the Atari build does this in assembly): draws every rock
+   whose outline lies inside the playing field, reports its dirty rectangle, and leaves the others alone with
+   render_pending set, so game_render draws those the ordinary way. It may call game_prepare_rock() to bring a
+   rock's cached outline up to date. */
+typedef void (*GameRocksDrawer)(void *context, GameState *state);
+
 /* Optional: called with the screen-space bounding box of everything game_render() draws
    on the playing field, so the platform can erase just those areas next time. */
 typedef void (*GameDirtyMarker)(void *context, int x0, int y0, int x1, int y1);
@@ -312,6 +319,7 @@ typedef struct GameRenderer {
     GameFieldClearer clear_field;
     GamePointDrawer points;
     GameOffsetPolygonDrawer polygon_offsets;
+    GameRocksDrawer rocks;
 } GameRenderer;
 
 /* The field rectangle is where the world is drawn on the screen. The game starts on the title screen. */
@@ -319,6 +327,9 @@ void game_init(GameState *state, uint16_t field_x, uint16_t field_y, uint16_t fi
 void game_start(GameState *state);   /* begin a new game right away (what pressing start does) */
 void game_step(GameState *state, const GameInput *input);
 void game_render(GameState *state, const GameRenderer *renderer);
+
+/* For renderers that draw rocks themselves: rebuild the rock's cached outline if its orientation changed. */
+void game_prepare_rock(const GameState *state, GameAsteroid *asteroid);
 
 /* Sound effects triggered since the last call, as a bit mask of 1 << SFX_*. */
 uint16_t game_take_sound_events(GameState *state);

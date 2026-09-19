@@ -7,19 +7,20 @@ TEST_DIR := tests
 CROSS ?= m68k-atari-mint-
 CC := $(CROSS)gcc
 HOST_CC ?= cc
-CFLAGS := -std=c99 -m68000 -O2 -Wall -Wextra -Werror -fomit-frame-pointer -I$(INC_DIR) $(EXTRA_CFLAGS)
-ASFLAGS := -m68000
+CFLAGS := -std=c99 -m68000 -O2 -Wall -Wextra -Werror -fomit-frame-pointer -I$(INC_DIR) -I$(BUILD_DIR) $(EXTRA_CFLAGS)
+ASFLAGS := -m68000 -I$(BUILD_DIR)
 LDFLAGS := -s
 TARGET := $(BUILD_DIR)/$(PROJECT).PRG
 DISK_IMAGE := $(BUILD_DIR)/asteroids-stfm.st
 TEST_TARGET := $(BUILD_DIR)/game_tests
 
 ATARI_SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c
-ATARI_ASMS := $(SRC_DIR)/st_video.S $(SRC_DIR)/st_ikbd.S
+ATARI_ASMS := $(SRC_DIR)/st_video.S $(SRC_DIR)/st_ikbd.S $(SRC_DIR)/st_rocks.S
+ASM_INC := $(BUILD_DIR)/asm_offsets.inc
 ATARI_OBJS := $(ATARI_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o) $(ATARI_ASMS:$(SRC_DIR)/%.S=$(BUILD_DIR)/%.o)
 TEST_SRCS := $(TEST_DIR)/game_tests.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c
 
-.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari test-poly-atari screens-atari enemies-atari micro-atari prof-atari bench-atari host-sanity clean
+.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari test-poly-atari test-rocks-atari screens-atari enemies-atari micro-atari prof-atari bench-atari host-sanity clean
 
 all: atari-st disk-image
 
@@ -29,7 +30,11 @@ $(BUILD_DIR):
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
+# byte offsets of GameState / GameAsteroid fields for the assembly, worked out by the compiler (see src/offsets.c)
+$(ASM_INC): $(SRC_DIR)/offsets.c $(INC_DIR)/game.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -S $(SRC_DIR)/offsets.c -o - | sed -n 's/^->\([A-Za-z_0-9]*\) #\{0,1\}\(-\{0,1\}[0-9]*\).*/.set \1, \2/p' > $@
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S $(ASM_INC) | $(BUILD_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 # rebuild objects when a header they include changes (a stale object with an old struct layout crashes at startup)
@@ -61,35 +66,38 @@ test-gfx-atari: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_gfx_test.c $(SRC_DIR)/st_video.S $(SRC_DIR)/st_text.c $(LDFLAGS) -o $(BUILD_DIR)/GFXTEST.PRG
 
 # Keyboard diagnostic: logs which keys reach the game (run in Hatari, read C:\KEYTEST.LOG).
-test-poly-atari: $(BUILD_DIR)
+test-poly-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_poly_test.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/POLYTEST.PRG
 
-test-keys-atari: $(BUILD_DIR)
+test-rocks-atari: $(BUILD_DIR) $(ASM_INC)
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_rocks_test.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/ROCKTEST.PRG
+
+test-keys-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_key_test.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/KEYTEST.PRG
 
 # Sound path on the emulated hardware: plays effects and reads the YM registers back (run in Hatari, read C:\SNDTEST.LOG).
-test-sound-atari: $(BUILD_DIR)
+test-sound-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_sound_test.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/SNDTEST.PRG
 
 # Scripted walk through the banner, pause, game over, initials and title screens (run in Hatari, take screenshots).
-screens-atari: $(BUILD_DIR)
+screens-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_screens.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/SCREENS.PRG
 
 # Line-up of every enemy and the four bosses (run in Hatari, take screenshots).
-enemies-atari: $(BUILD_DIR)
+enemies-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_enemies.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/ENEMIES.PRG
 
 # Timings of the drawing primitives (run in Hatari, results in C:\MICRO.LOG).
-micro-atari: $(BUILD_DIR)
+micro-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_micro.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/MICRO.PRG
 
 # Sampling profiler (run in Hatari, results in C:\PROF.BIN; see tools/prof_report.py): make prof-atari WAVE=4
 WAVE ?= 4
-prof-atari: $(BUILD_DIR)
+prof-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DPROF_WAVE=$(WAVE) -DATARI_ST_TARGET $(TEST_DIR)/atari_prof.c $(TEST_DIR)/prof_isr.S $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) -o $(BUILD_DIR)/PROF.PRG
 
 # Frame-cost benchmark (run in Hatari): game step + clear + render for a few wave sizes.
-bench-atari: $(BUILD_DIR)
+bench-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_bench.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/GAMEBENCH.PRG
 
 host-sanity: $(BUILD_DIR)

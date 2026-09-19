@@ -130,6 +130,7 @@ static GameRenderer make_renderer(void) {
     renderer.clear_field = capture_clear;
     renderer.points = capture_points;
     renderer.polygon_offsets = NULL;
+    renderer.rocks = NULL;
     return renderer;
 }
 

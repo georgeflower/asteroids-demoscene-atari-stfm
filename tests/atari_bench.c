@@ -79,6 +79,7 @@ static uint32_t run(GameState *state, int mode) {
     full.clear_field = platform_clear_field;
     full.points = platform_draw_points;
     full.polygon_offsets = platform_draw_polygon_offsets;
+    full.rocks = platform_draw_rocks;
 
     memset(&input, 0, sizeof(input));
     input.left = 1;   /* manual input: measures the game itself */

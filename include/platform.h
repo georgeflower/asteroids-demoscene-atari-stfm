@@ -25,6 +25,12 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color);
 void platform_draw_polygon_offsets(void *context, int center_x, int center_y, const int8_t *off_x,
                                    const int8_t *off_y, int count, uint8_t color, void *cache, uint8_t *cache_valid);
+/* All the rocks that lie inside the field, in assembly (see GameRocksDrawer in game.h). */
+void platform_draw_rocks(void *context, GameState *state);
+
+/* The dirty rectangles reported for the page being drawn (for the tests). */
+int platform_dirty_count(void);
+void platform_dirty_get(int index, short *out);
 void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale);
 void platform_draw_points(void *context, const int16_t *points, int count, uint8_t color);
 void platform_clear_field(void *context);

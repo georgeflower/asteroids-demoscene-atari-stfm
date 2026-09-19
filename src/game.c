@@ -1811,17 +1811,22 @@ static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroi
     asteroid->cache_valid = 1;
 }
 
-static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, const GameRenderer *renderer) {
-    const int center_x = screen_x(state, asteroid->x);
-    const int center_y = screen_y(state, asteroid->y);
+void game_prepare_rock(const GameState *state, GameAsteroid *asteroid) {
     const uint8_t orientation = (uint8_t) (asteroid->angle >> 10);
-    int16_t points[GAME_MAX_ASTEROID_POINTS * 2];
-    int count;
-    int vertex;
 
     if (!asteroid->cache_valid || asteroid->cache_index != orientation) {
         rebuild_asteroid_cache(state, asteroid, orientation);
     }
+}
+
+static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, const GameRenderer *renderer) {
+    const int center_x = screen_x(state, asteroid->x);
+    const int center_y = screen_y(state, asteroid->y);
+    int16_t points[GAME_MAX_ASTEROID_POINTS * 2];
+    int count;
+    int vertex;
+
+    game_prepare_rock(state, asteroid);
     count = asteroid->draw_count;
 
     if (renderer->polygon_offsets != NULL && center_x + asteroid->bound_x0 >= (int) state->field_x &&
@@ -2441,8 +2446,11 @@ void game_render(GameState *state, const GameRenderer *renderer) {
         draw_stars(state, renderer);
         draw_ship(state, renderer);
         draw_bullets(state, renderer);
+        if (renderer->rocks != NULL) {
+            renderer->rocks(renderer->context, state);
+        }
         for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
-            if (state->asteroids[index].active) {
+            if (state->asteroids[index].active && (renderer->rocks == NULL || state->asteroids[index].render_pending)) {
                 draw_asteroid(state, &state->asteroids[index], renderer);
             }
         }
