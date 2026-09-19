@@ -19,7 +19,7 @@ ATARI_ASMS := $(SRC_DIR)/st_video.S $(SRC_DIR)/st_ikbd.S
 ATARI_OBJS := $(ATARI_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o) $(ATARI_ASMS:$(SRC_DIR)/%.S=$(BUILD_DIR)/%.o)
 TEST_SRCS := $(TEST_DIR)/game_tests.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c
 
-.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari screens-atari enemies-atari aa-atari bench-atari host-sanity clean
+.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari screens-atari enemies-atari bench-atari host-sanity clean
 
 all: atari-st disk-image
 
@@ -75,10 +75,6 @@ screens-atari: $(BUILD_DIR)
 # Line-up of every enemy and the four bosses (run in Hatari, take screenshots).
 enemies-atari: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_enemies.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/ENEMIES.PRG
-
-# Anti-aliasing experiment: plain vs smooth outlines side by side, with timings in C:\AATEST.LOG.
-aa-atari: $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_aa.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/AATEST.PRG
 
 # Frame-cost benchmark (run in Hatari): game step + clear + render for a few wave sizes.
 bench-atari: $(BUILD_DIR)

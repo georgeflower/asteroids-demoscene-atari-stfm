@@ -36,8 +36,6 @@ extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, l
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
-extern void st_aa_run_x(unsigned char *buffer, long col, long count, long y_q16, long step_q16, long dim_off, long extra_off);
-extern void st_aa_run_y(unsigned char *buffer, long row, long count, long x_q16, long step_q16, long dim_off, long extra_off);
 extern void st_ikbd_install(void);
 extern void st_ikbd_remove(void);
 
@@ -371,53 +369,6 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
         st_draw_line_plane(draw_buffer, cx0, cy0, cx1, cy1, plane_offset_for(color));
     } else {
         st_draw_line_low(draw_buffer, cx0, cy0, cx1, cy1, color);
-    }
-}
-
-/* Smooth line: pixels on both sides of the true line share it (see st_aa_run_x). dim_plane and
-   bright_plane are bitplane numbers 0-3; a bright pixel has both bits set, a dim one only dim_plane. */
-static void aa_line(long x0, long y0, long x1, long y1, long dim_off, long extra_off) {
-    long dx;
-    long dy;
-    long adx;
-    long ady;
-
-    if (!inside_field((int) x0, (int) y0) || !inside_field((int) x1, (int) y1)) {
-        if (!clip_line(&x0, &y0, &x1, &y1)) {
-            return;
-        }
-    }
-    dx = x1 - x0;
-    dy = y1 - y0;
-    adx = dx < 0 ? -dx : dx;
-    ady = dy < 0 ? -dy : dy;
-
-    if (adx >= ady) {
-        if (dx < 0) {
-            long t = x0; x0 = x1; x1 = t;
-            t = y0; y0 = y1; y1 = t;
-            dy = -dy;
-        }
-        st_aa_run_x(draw_buffer, x0, adx + 1, y0 * 4L * 65536L, adx ? (dy * 4L * 65536L) / adx : 0L,
-                    dim_off, extra_off);
-    } else {
-        if (dy < 0) {
-            long t = x0; x0 = x1; x1 = t;
-            t = y0; y0 = y1; y1 = t;
-            dx = -dx;
-        }
-        st_aa_run_y(draw_buffer, y0, ady + 1, x0 * 4L * 65536L, (dx * 4L * 65536L) / ady, dim_off, extra_off);
-    }
-}
-
-void platform_draw_aa_polygon(const int16_t *points, int count, int dim_plane, int bright_plane) {
-    int index;
-
-    for (index = 0; index < count; ++index) {
-        const int next = (index + 1 == count) ? 0 : index + 1;
-
-        aa_line(points[index * 2], points[index * 2 + 1], points[next * 2], points[next * 2 + 1],
-                dim_plane * 2L, bright_plane * 2L);
     }
 }
 

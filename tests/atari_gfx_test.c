@@ -20,8 +20,6 @@ extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, l
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
-extern void st_aa_run_x(unsigned char *buffer, long col, long count, long y_q16, long step_q16, long dim_off, long extra_off);
-extern void st_aa_run_y(unsigned char *buffer, long row, long count, long x_q16, long step_q16, long dim_off, long extra_off);
 
 static unsigned char buffer_a[SCREEN_BYTES + 2];
 static unsigned char buffer_b[SCREEN_BYTES + 2];
@@ -290,90 +288,12 @@ static void test_text(void) {
     }
 }
 
-/* Smooth line runs against a plain C model of the same rule (see st_video.S). */
-static void aa_or(unsigned char *buffer, int x, int y, long plane_offset) {
-    unsigned char *word = buffer + y * 160 + (x >> 4) * 8 + plane_offset;
-    const int bit = x & 15;
-
-    if (bit < 8) {
-        word[0] = (unsigned char) (word[0] | (0x80 >> bit));
-    } else {
-        word[1] = (unsigned char) (word[1] | (0x80 >> (bit - 8)));
-    }
-}
-
-static void test_smooth_lines(void) {
-    int trial;
-
-    for (trial = 0; trial < 1200; ++trial) {
-        const int along_x = trial & 1;
-        const int count = 1 + (int) rand_below(150);
-        const int start_across = 2 + (int) rand_below(190);
-        const int end_across = 2 + (int) rand_below(190);
-        const int start_along = (int) rand_below((unsigned) ((along_x ? WIDTH : HEIGHT) - count - 1));
-        const long plane_a = (long) rand_below(4) * 2;
-        const long plane_b = (long) ((trial / 4) % 4) * 2;
-        const long across_q16 = (long) start_across * 4L * 65536L + (long) rand_below(4) * 16384L;
-        long step = count > 1 ? (((long) end_across - start_across) * 4L * 65536L) / (count - 1) : 0;
-        long q = across_q16;
-        int index;
-        int limit = along_x ? HEIGHT : WIDTH;
-        int within = 1;
-
-        /* keep the pair (across, across + 1) on the screen */
-        for (index = 0; index < count; ++index, q += step) {
-            if (((q >> 16) >> 2) + 1 >= limit || q < 0) {
-                within = 0;
-                break;
-            }
-        }
-        if (!within) {
-            continue;
-        }
-        memset(buffer_a, 0, SCREEN_BYTES);
-        memset(buffer_b, 0, SCREEN_BYTES);
-        if (along_x) {
-            st_aa_run_x(buffer_a, start_along, count, across_q16, step, plane_a, plane_b);
-        } else {
-            st_aa_run_y(buffer_a, start_along, count, across_q16, step, plane_a, plane_b);
-        }
-        q = across_q16;
-        for (index = 0; index < count; ++index, q += step) {
-            const int quarter = (int) (q >> 16);
-            const int base = quarter >> 2;
-            const int frac = quarter & 3;
-            const int a = along_x ? start_along + index : base;
-            const int b = along_x ? base : start_along + index;
-
-            /* first pixel dim, bright too for fractions 0 and 1; second pixel dim, bright for 3 */
-            aa_or(buffer_b, a, b, plane_a);
-            if (frac < 2) {
-                aa_or(buffer_b, a, b, plane_b);
-            }
-            if (frac != 0) {
-                const int a2 = along_x ? a : a + 1;
-                const int b2 = along_x ? b + 1 : b;
-
-                aa_or(buffer_b, a2, b2, plane_a);
-                if (frac == 3) {
-                    aa_or(buffer_b, a2, b2, plane_b);
-                }
-            }
-        }
-        ++checks;
-        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
-            report(along_x ? "smooth run x" : "smooth run y", trial);
-        }
-    }
-}
-
 int main(void) {
     test_polygons();
     test_plane_matches_four_plane_drawer();
     test_clear_rect();
     test_text();
     test_plot_point();
-    test_smooth_lines();
     printf("%d checks, %d failures\n", checks, failures);
     printf("press a key\n");
     getchar();

@@ -87,7 +87,6 @@ make test-gfx-atari     # build/GFXTEST.PRG: assembly drawing routines and the t
 make bench-atari        # build/GAMEBENCH.PRG: milliseconds per frame for several wave sizes
 make screens-atari      # build/SCREENS.PRG: scripted walk through the banner, pause, power-ups, game over, initials and title screens
 make enemies-atari      # build/ENEMIES.PRG: line-up of every enemy, then each boss
-make aa-atari           # build/AATEST.PRG: plain vs anti-aliased outlines side by side, timings in C:\AATEST.LOG (experiment, not used by the game yet)
 make test-sound-atari   # build/SNDTEST.PRG: plays effects and reads the YM2149 registers back from the emulated chip (C:\\SNDTEST.LOG)
 make test-keys-atari    # build/KEYTEST.PRG: logs which keys reach the game (C:\KEYTEST.LOG)
 ```

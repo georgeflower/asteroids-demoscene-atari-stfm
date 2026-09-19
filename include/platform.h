@@ -23,9 +23,6 @@ void platform_poll_input(GameInput *input);
 void platform_begin_frame(void);
 void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t color);
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color);
-/* Anti-aliased closed outline: pixels next to the line are half-lit (bitplane dim_plane only), pixels on it
-   fully lit (dim_plane and bright_plane), so palette entries 1<<dim and (1<<dim)|(1<<bright) form a 2-step ramp. */
-void platform_draw_aa_polygon(const int16_t *points, int count, int dim_plane, int bright_plane);
 void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale);
 void platform_draw_points(void *context, const int16_t *points, int count, uint8_t color);
 void platform_clear_field(void *context);
