@@ -176,7 +176,9 @@ int platform_init(void) {
 }
 
 void platform_shutdown(void) {
-    static const char ikbd_tos_mode[] = { 0x08, 0x14 };  /* relative mouse, joystick events */
+    /* Joystick events first, relative mouse last: a joystick command stops port 0 being scanned as a
+       mouse until the next mouse command, so ending with 0x14 leaves the GEM pointer dead. */
+    static const char ikbd_tos_mode[] = { 0x14, 0x08 };
     int i;
 
     if (!entered_supervisor) {
