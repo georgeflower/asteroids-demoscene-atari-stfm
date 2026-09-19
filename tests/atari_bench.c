@@ -1,6 +1,6 @@
 /*
  * Frame cost benchmark for the Atari build. Times the parts of a frame
- * (game step, screen clear, render maths, line drawing) separately for a few
+ * (game step, render maths, line drawing, erase) separately for a few
  * wave sizes and prints milliseconds per frame. A frame must fit in 20 ms to
  * hold 50 fps. Run it inside Hatari: make bench-atari.
  */
@@ -35,12 +35,26 @@ static void null_line(void *context, int x0, int y0, int x1, int y1, uint8_t col
 }
 
 static uint32_t run(GameState *state, int mode) {
+    GameRenderer maths_only;
+    GameRenderer maths_and_dirty;
+    GameRenderer full;
     GameInput input;
     uint32_t start;
     int frame;
 
+    memset(&maths_only, 0, sizeof(maths_only));
+    maths_only.line = null_line;
+    maths_and_dirty = maths_only;
+    maths_and_dirty.dirty = platform_mark_dirty;
+    memset(&full, 0, sizeof(full));
+    full.line = platform_draw_line;
+    full.polygon = platform_draw_polygon;
+    full.dirty = platform_mark_dirty;
+    full.text = platform_draw_text;
+    full.clear_field = platform_clear_field;
+
     memset(&input, 0, sizeof(input));
-    input.left = 1;   /* manual input: measures the game, not the demo autopilot */
+    input.left = 1;   /* manual input: measures the game itself */
     lines_seen = 0;
     start = ST_HZ200;
     for (frame = 0; frame < BENCH_FRAMES; ++frame) {
@@ -50,17 +64,17 @@ static uint32_t run(GameState *state, int mode) {
         }
         if (mode == MODE_MATHS_AND_CLEAR) {
             /* render without drawing, only to report the dirty areas, then erase them */
-            game_render(state, NULL, null_line, NULL, platform_mark_dirty);
+            game_render(state, &maths_and_dirty);
             platform_begin_frame();
         }
         if (mode == MODE_ALL) {
             platform_begin_frame();
         }
         if (mode == MODE_RENDER_MATHS) {
-            game_render(state, NULL, null_line, NULL, NULL);
+            game_render(state, &maths_only);
         }
         if (mode == MODE_RENDER_DRAW || mode == MODE_ALL) {
-            game_render(state, NULL, platform_draw_line, platform_draw_polygon, platform_mark_dirty);
+            game_render(state, &full);
         }
     }
     return ST_HZ200 - start;
@@ -79,33 +93,27 @@ static int count_rocks(const GameState *state) {
 int main(void) {
     static const int waves[3] = {1, 4, 8};
     static const char *const names[MODE_COUNT] = {"game_step", "maths+clear", "render maths", "render+draw", "all"};
-    PlatformConfig config;
     GameState state;
     uint32_t ticks[3][MODE_COUNT];
     int rocks[3];
-    uint32_t lines_per_frame = 0;
     int wave_index;
     int mode;
 
-    config.resolution = PLATFORM_RES_LOW;
-    config.width = 320;
-    config.height = 200;
-    if (!platform_init(&config)) {
+    if (!platform_init()) {
         return 1;
     }
 
     for (wave_index = 0; wave_index < 3; ++wave_index) {
-        game_init(&state, config.width, config.height);
+        game_init(&state, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
+        game_start(&state);
         memset(state.asteroids, 0, sizeof(state.asteroids));
         state.wave = (uint8_t) (waves[wave_index] - 1);
         state.ship.invulnerability = 255;
-        game_step(&state, &(GameInput) {0, 0, 0, 0, 0, 0});
+        game_step(&state, &(GameInput) {0, 0, 0, 0, 0, 0, 0, 0});
+        state.banner_timer = 0;
         rocks[wave_index] = count_rocks(&state);
         for (mode = 0; mode < MODE_COUNT; ++mode) {
             ticks[wave_index][mode] = run(&state, mode);
-            if (mode == MODE_RENDER_MATHS && wave_index == 2) {
-                lines_per_frame = lines_seen / BENCH_FRAMES;
-            }
         }
     }
 
@@ -119,7 +127,7 @@ int main(void) {
             printf("  %-13s %lu.%lu ms\n", names[mode], tenths / 10, tenths % 10);
         }
     }
-    printf("20.0 ms = 50 fps. lines/frame at wave 8: %lu\n", (unsigned long) lines_per_frame);
+    printf("20.0 ms = 50 fps\n");
     printf("press a key\n");
     getchar();
     return 0;

@@ -5,26 +5,32 @@
 
 #include "game.h"
 
-enum {
-    PLATFORM_RES_LOW = 0,
-    PLATFORM_RES_MEDIUM = 1
-};
+/*
+ * Screen layout (320x200, 4 bitplanes): a coloured frame with a two-row HUD strip along the
+ * top, and a black playing field inside it. All measurements are multiples of 16 pixels
+ * horizontally so the field lines up with the ST's 16-pixel bitplane groups.
+ */
+#define PLATFORM_SCREEN_WIDTH 320
+#define PLATFORM_SCREEN_HEIGHT 200
+#define PLATFORM_FIELD_X 16
+#define PLATFORM_FIELD_Y 16
+#define PLATFORM_FIELD_WIDTH 288
+#define PLATFORM_FIELD_HEIGHT 176
 
-typedef struct PlatformConfig {
-    uint16_t width;
-    uint16_t height;
-    uint8_t resolution;
-} PlatformConfig;
-
-int platform_init(const PlatformConfig *config);
+int platform_init(void);
 void platform_shutdown(void);
 void platform_poll_input(GameInput *input);
 void platform_begin_frame(void);
 void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t color);
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color);
+void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale);
+void platform_clear_field(void *context);
 void platform_end_frame(void);
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1);
 int platform_take_elapsed_frames(void);
-int platform_cycle_resolution(PlatformConfig *config);
+
+/* High score file (ASTROIDS.SCO in the current directory). Load returns the bytes read, 0 if none. */
+int platform_load_scores(uint8_t *data, int size);
+void platform_save_scores(const uint8_t *data, int size);
 
 #endif

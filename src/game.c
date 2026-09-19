@@ -28,6 +28,17 @@
 #define SPEED_SCALE_MAX_WAVE 40
 #define NUDGE_SIN 2286                       /* sin(0.14 rad), Q14 */
 #define NUDGE_COS 16219                      /* cos(0.14 rad), Q14 */
+#define HYPERSPACE_SAFE_MARGIN 24            /* clear of every rock by this much (60 of Lovable's 800x600 px) */
+#define HYPERSPACE_ATTEMPTS 100
+#define MAX_LIVES 9
+
+#define BANNER_FRAMES 75
+#define GAME_OVER_FRAMES 150
+#define GAME_OVER_SKIP_FRAMES 30
+#define PROMPT_BLINK_FRAMES 25
+#define REPEAT_FIRST_FRAMES 15
+#define REPEAT_NEXT_FRAMES 4
+#define INITIALS_LENGTH 3
 
 static const uint8_t asteroid_radius_table[4] = {0, 5, 10, 16};
 static const int32_t asteroid_speed_table[4] = {0, 37749, 25166, 15729};
@@ -121,6 +132,16 @@ static int within_radius(int32_t ax, int32_t ay, int32_t bx, int32_t by, int rad
     return (mul16(dx, dx) + mul16(dy, dy)) < mul16(r, r);
 }
 
+static int pressed(uint8_t now, uint8_t before) {
+    return now != 0 && before == 0;
+}
+
+static void enter_mode(GameState *state, uint8_t mode) {
+    state->mode = mode;
+    state->mode_timer = 0;
+    state->screen_refresh = 2;   /* both screen buffers need the new screen */
+}
+
 static void reset_ship(GameState *state) {
     state->ship.x = ((int32_t) GAME_WORLD_WIDTH / 2) << GAME_FIX_SHIFT;
     state->ship.y = ((int32_t) GAME_WORLD_HEIGHT / 2) << GAME_FIX_SHIFT;
@@ -128,6 +149,7 @@ static void reset_ship(GameState *state) {
     state->ship.vy = 0;
     state->ship.angle = 49152u;   /* pointing up */
     state->ship.cooldown = 0;
+    state->ship.hyperspace_cooldown = 0;
     state->ship.invulnerability = SHIP_INVULNERABILITY_FRAMES;
     state->ship.thrusting = 0;
 }
@@ -200,6 +222,7 @@ static void spawn_wave(GameState *state) {
             }
         }
     }
+    state->banner_timer = BANNER_FRAMES;
 }
 
 static void split_asteroid(GameState *state, const GameAsteroid *asteroid) {
@@ -211,61 +234,51 @@ static void split_asteroid(GameState *state, const GameAsteroid *asteroid) {
     spawn_asteroid(state, (uint8_t) (asteroid->size - 1), asteroid->x, asteroid->y);
 }
 
-static uint8_t any_manual_input(const GameInput *input) {
-    return (uint8_t) (input->left || input->right || input->thrust || input->fire);
+/* Award points, and an extra life for every EXTRA_LIFE_INTERVAL crossed. */
+static void add_score(GameState *state, uint32_t points) {
+    state->score += points;
+    while (state->score >= state->next_extra_life) {
+        if (state->lives < MAX_LIVES) {
+            ++state->lives;
+        }
+        state->next_extra_life += GAME_EXTRA_LIFE_INTERVAL;
+    }
 }
 
-static void select_demo_input(const GameState *state, GameInput *ai) {
-    const GameAsteroid *target = NULL;
-    int32_t best_distance = 0x7fffffffl;
-    int index;
+/* Jump to a spot clear of every rock (Lovable's hyperspace), then recharge. */
+static void hyperspace(GameState *state) {
+    GameShip *ship = &state->ship;
+    int32_t x = (int32_t) (GAME_WORLD_WIDTH / 2) << GAME_FIX_SHIFT;
+    int32_t y = (int32_t) (GAME_WORLD_HEIGHT / 2) << GAME_FIX_SHIFT;
+    int attempt;
 
-    memset(ai, 0, sizeof(*ai));
+    for (attempt = 0; attempt < HYPERSPACE_ATTEMPTS; ++attempt) {
+        const int32_t try_x = (int32_t) game_rand_below(state, GAME_WORLD_WIDTH) << GAME_FIX_SHIFT;
+        const int32_t try_y = (int32_t) game_rand_below(state, GAME_WORLD_HEIGHT) << GAME_FIX_SHIFT;
+        int safe = 1;
+        int index;
 
-    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
-        const GameAsteroid *asteroid = &state->asteroids[index];
-        if (asteroid->active) {
-            const int32_t dx = (asteroid->x - state->ship.x) >> GAME_FIX_SHIFT;
-            const int32_t dy = (asteroid->y - state->ship.y) >> GAME_FIX_SHIFT;
-            const int32_t distance = mul16((int16_t) dx, (int16_t) dx) + mul16((int16_t) dy, (int16_t) dy);
-            if (distance < best_distance) {
-                best_distance = distance;
-                target = asteroid;
+        for (index = 0; index < GAME_MAX_ASTEROIDS && safe; ++index) {
+            const GameAsteroid *asteroid = &state->asteroids[index];
+            if (asteroid->active &&
+                within_radius(try_x, try_y, asteroid->x, asteroid->y,
+                              asteroid_radius_table[asteroid->size] + HYPERSPACE_SAFE_MARGIN)) {
+                safe = 0;
             }
+        }
+        if (safe) {
+            x = try_x;
+            y = try_y;
+            break;
         }
     }
 
-    if (target != NULL) {
-        const int32_t dx = (target->x - state->ship.x) >> GAME_FIX_SHIFT;
-        const int32_t dy = (target->y - state->ship.y) >> GAME_FIX_SHIFT;
-        int32_t best_dot = -0x7fffffffl;
-        uint16_t best_angle = 0;
-        int16_t difference;
-        int step;
-
-        for (step = 0; step < 32; ++step) {
-            const uint16_t angle = (uint16_t) (step << 11);
-            const int32_t dot = mul16((int16_t) trig_cos(angle), (int16_t) dx) + mul16((int16_t) trig_sin(angle), (int16_t) dy);
-            if (dot > best_dot) {
-                best_dot = dot;
-                best_angle = angle;
-            }
-        }
-
-        difference = (int16_t) (uint16_t) (best_angle - state->ship.angle);
-        if (difference > SHIP_TURN_STEP) {
-            ai->right = 1;
-        } else if (difference < -SHIP_TURN_STEP) {
-            ai->left = 1;
-        }
-
-        if (best_distance > 60 * 60) {
-            ai->thrust = 1;
-        }
-        if (!ai->left && !ai->right) {
-            ai->fire = 1;
-        }
-    }
+    ship->x = x;
+    ship->y = y;
+    ship->vx = 0;
+    ship->vy = 0;
+    ship->hyperspace_cooldown = GAME_HYPERSPACE_RECHARGE_FRAMES;
+    ship->invulnerability = SHIP_INVULNERABILITY_FRAMES;
 }
 
 static void fire_bullet(GameState *state) {
@@ -311,8 +324,14 @@ static void update_ship(GameState *state, const GameInput *input) {
     if (ship->invulnerability > 0) {
         --ship->invulnerability;
     }
+    if (ship->hyperspace_cooldown > 0) {
+        --ship->hyperspace_cooldown;
+    }
     if (input->fire && ship->cooldown == 0) {
         fire_bullet(state);
+    }
+    if (input->hyperspace && ship->hyperspace_cooldown == 0) {
+        hyperspace(state);
     }
 
     vx8 = ship->vx >> 8;
@@ -418,7 +437,7 @@ static void resolve_bullet_collisions(GameState *state) {
                 GameAsteroid exploded = *asteroid;
                 bullet->active = 0;
                 asteroid->active = 0;
-                state->score += asteroid_points_table[exploded.size];
+                add_score(state, asteroid_points_table[exploded.size]);
                 split_asteroid(state, &exploded);
                 break;
             }
@@ -426,15 +445,14 @@ static void resolve_bullet_collisions(GameState *state) {
     }
 }
 
-/* Fresh game: score, lives, wave and playfield reset (the random generator carries on). */
-static void start_new_game(GameState *state) {
-    state->score = 0;
-    state->wave = 1;
-    state->lives = 3;
-    memset(state->asteroids, 0, sizeof(state->asteroids));
-    memset(state->bullets, 0, sizeof(state->bullets));
+static void lose_life(GameState *state) {
+    if (state->lives > 0) {
+        --state->lives;
+    }
     reset_ship(state);
-    spawn_wave(state);
+    if (state->lives == 0) {
+        enter_mode(state, GAME_MODE_GAME_OVER);
+    }
 }
 
 static void resolve_ship_collisions(GameState *state) {
@@ -451,15 +469,7 @@ static void resolve_ship_collisions(GameState *state) {
         }
         if (within_radius(state->ship.x, state->ship.y, asteroid->x, asteroid->y,
                           asteroid_radius_table[asteroid->size] + SHIP_RADIUS)) {
-            if (state->lives > 0) {
-                --state->lives;
-            }
-            reset_ship(state);
-            if (state->lives == 0) {
-                /* game over: back to the attract screen, where the autopilot plays until a key is pressed */
-                start_new_game(state);
-                state->demo_mode = 1;
-            }
+            lose_life(state);
             break;
         }
     }
@@ -475,66 +485,263 @@ static uint8_t active_asteroids(const GameState *state) {
     return 0;
 }
 
-void game_init(GameState *state, uint16_t width, uint16_t height) {
-    memset(state, 0, sizeof(*state));
-    state->rng_state = 0x1badc0deu;
-    state->lives = 3;
-    state->wave = 1;
-    state->demo_mode = 1;
-    game_set_resolution(state, width, height);
-    reset_ship(state);
-    spawn_wave(state);
-}
+/* ---- high scores ---- */
 
-void game_set_resolution(GameState *state, uint16_t width, uint16_t height) {
+/* Position the current score would take in the table, or -1 if it does not qualify. */
+static int score_rank(const GameState *state) {
     int index;
 
-    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
-        state->asteroids[index].cache_valid = 0;
+    if (state->score < GAME_MIN_SCORE_FOR_INITIALS) {
+        return -1;
     }
-    state->width = width;
-    state->height = height;
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        if (state->score > state->high_scores[index].score) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+static void insert_score(GameState *state, int rank) {
+    int index;
+
+    for (index = GAME_HIGH_SCORE_COUNT - 1; index > rank; --index) {
+        state->high_scores[index] = state->high_scores[index - 1];
+    }
+    state->high_scores[rank].score = state->score;
+    memcpy(state->high_scores[rank].initials, state->entry, INITIALS_LENGTH);
+    state->high_scores[rank].initials[INITIALS_LENGTH] = 0;
+    state->scores_changed = 1;
+}
+
+void game_scores_pack(const GameState *state, uint8_t *out) {
+    int index;
+
+    out[0] = 'A';
+    out[1] = 'S';
+    out[2] = 'T';
+    out[3] = '1';
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        const GameHighScore *entry = &state->high_scores[index];
+        uint8_t *slot = out + 4 + index * 8;
+
+        slot[0] = (uint8_t) entry->initials[0];
+        slot[1] = (uint8_t) entry->initials[1];
+        slot[2] = (uint8_t) entry->initials[2];
+        slot[3] = 0;
+        slot[4] = (uint8_t) (entry->score >> 24);
+        slot[5] = (uint8_t) (entry->score >> 16);
+        slot[6] = (uint8_t) (entry->score >> 8);
+        slot[7] = (uint8_t) entry->score;
+    }
+}
+
+int game_scores_unpack(GameState *state, const uint8_t *data) {
+    GameHighScore loaded[GAME_HIGH_SCORE_COUNT];
+    int index;
+    int letter;
+
+    if (data[0] != 'A' || data[1] != 'S' || data[2] != 'T' || data[3] != '1') {
+        return 0;
+    }
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        const uint8_t *slot = data + 4 + index * 8;
+
+        for (letter = 0; letter < INITIALS_LENGTH; ++letter) {
+            if (!((slot[letter] >= 'A' && slot[letter] <= 'Z') || slot[letter] == '-')) {
+                return 0;
+            }
+            loaded[index].initials[letter] = (char) slot[letter];
+        }
+        loaded[index].initials[INITIALS_LENGTH] = 0;
+        loaded[index].score = ((uint32_t) slot[4] << 24) | ((uint32_t) slot[5] << 16) |
+                              ((uint32_t) slot[6] << 8) | (uint32_t) slot[7];
+    }
+    memcpy(state->high_scores, loaded, sizeof(loaded));
+    return 1;
+}
+
+/* ---- game flow ---- */
+
+void game_start(GameState *state) {
+    state->score = 0;
+    state->next_extra_life = GAME_EXTRA_LIFE_INTERVAL;
+    state->wave = 1;
+    state->lives = GAME_START_LIVES;
+    state->paused = 0;
+    memset(state->asteroids, 0, sizeof(state->asteroids));
+    memset(state->bullets, 0, sizeof(state->bullets));
+    reset_ship(state);
+    state->rng_state ^= (uint32_t) state->frame * 2654435761u;   /* a different field every game */
+    spawn_wave(state);
+    enter_mode(state, GAME_MODE_PLAYING);
+}
+
+static void set_field(GameState *state, uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
+    state->field_x = x;
+    state->field_y = y;
+    state->field_width = width;
+    state->field_height = height;
     state->x_scale = (uint16_t) (((uint32_t) width * 256u) / GAME_WORLD_WIDTH);
     state->y_scale = (uint16_t) (((uint32_t) height * 256u) / GAME_WORLD_HEIGHT);
 }
 
-void game_step(GameState *state, const GameInput *input) {
-    GameInput effective_input;
-    ++state->frame;
+void game_init(GameState *state, uint16_t field_x, uint16_t field_y, uint16_t field_width, uint16_t field_height) {
+    int index;
 
-    if (state->demo_mode && any_manual_input(input)) {
-        /* the first key press ends the attract demo and starts a real game */
-        start_new_game(state);
-        state->demo_mode = 0;
+    memset(state, 0, sizeof(*state));
+    state->rng_state = 0x1badc0deu;
+    state->lives = GAME_START_LIVES;
+    state->wave = 1;
+    state->next_extra_life = GAME_EXTRA_LIFE_INTERVAL;
+    set_field(state, field_x, field_y, field_width, field_height);
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        state->high_scores[index].initials[0] = '-';
+        state->high_scores[index].initials[1] = '-';
+        state->high_scores[index].initials[2] = '-';
+    }
+    reset_ship(state);
+    state->prompt_visible = 1;
+    state->hud_refresh = 2;
+    enter_mode(state, GAME_MODE_TITLE);
+}
+
+static void step_title(GameState *state, const GameInput *input, const GameInput *previous) {
+    if (pressed(input->start, previous->start) || pressed(input->fire, previous->fire)) {
+        game_start(state);
+        return;
+    }
+    if (++state->mode_timer >= PROMPT_BLINK_FRAMES) {
+        state->mode_timer = 0;
+        state->prompt_visible ^= 1;
+        state->prompt_refresh = 2;
+    }
+}
+
+static void step_playing(GameState *state, const GameInput *input, const GameInput *previous) {
+    if (pressed(input->pause, previous->pause)) {
+        state->paused ^= 1;
+    }
+    if (state->paused) {
+        return;
     }
 
-    if (state->demo_mode) {
-        select_demo_input(state, &effective_input);
-    } else {
-        effective_input = *input;
-    }
-
-    update_ship(state, &effective_input);
+    update_ship(state, input);
     update_bullets(state);
     update_asteroids(state);
     resolve_bullet_collisions(state);
     resolve_ship_collisions(state);
 
-    if (!active_asteroids(state)) {
+    if (state->banner_timer > 0) {
+        --state->banner_timer;
+    }
+    if (state->mode == GAME_MODE_PLAYING && !active_asteroids(state)) {
         ++state->wave;
         reset_ship(state);
         spawn_wave(state);
     }
 }
 
+static void step_game_over(GameState *state, const GameInput *input, const GameInput *previous) {
+    const int skip = state->mode_timer >= GAME_OVER_SKIP_FRAMES &&
+                     (pressed(input->start, previous->start) || pressed(input->fire, previous->fire));
+
+    if (++state->mode_timer < GAME_OVER_FRAMES && !skip) {
+        return;
+    }
+    if (score_rank(state) >= 0) {
+        state->entry[0] = 'A';
+        state->entry[1] = 'A';
+        state->entry[2] = 'A';
+        state->entry[3] = 0;
+        state->entry_position = 0;
+        state->repeat_timer = 0;
+        enter_mode(state, GAME_MODE_ENTER_INITIALS);
+    } else {
+        enter_mode(state, GAME_MODE_TITLE);
+    }
+}
+
+static void step_enter_initials(GameState *state, const GameInput *input, const GameInput *previous) {
+    int move = 0;
+
+    if (input->left && !input->right) {
+        if (!previous->left) {
+            move = -1;
+            state->repeat_timer = REPEAT_FIRST_FRAMES;
+        } else if (state->repeat_timer > 0 && --state->repeat_timer == 0) {
+            move = -1;
+            state->repeat_timer = REPEAT_NEXT_FRAMES;
+        }
+    } else if (input->right && !input->left) {
+        if (!previous->right) {
+            move = 1;
+            state->repeat_timer = REPEAT_FIRST_FRAMES;
+        } else if (state->repeat_timer > 0 && --state->repeat_timer == 0) {
+            move = 1;
+            state->repeat_timer = REPEAT_NEXT_FRAMES;
+        }
+    }
+
+    if (move != 0) {
+        char *letter = &state->entry[state->entry_position];
+
+        *letter = (char) (*letter + move);
+        if (*letter > 'Z') {
+            *letter = 'A';
+        } else if (*letter < 'A') {
+            *letter = 'Z';
+        }
+        state->screen_refresh = 2;
+    }
+
+    if (pressed(input->start, previous->start) || pressed(input->fire, previous->fire)) {
+        ++state->entry_position;
+        if (state->entry_position < INITIALS_LENGTH) {
+            /* the next letter starts where this one ended, which is quicker for repeated letters */
+            state->entry[state->entry_position] = state->entry[state->entry_position - 1];
+            state->screen_refresh = 2;
+        } else {
+            const int rank = score_rank(state);
+            if (rank >= 0) {
+                insert_score(state, rank);
+            }
+            enter_mode(state, GAME_MODE_TITLE);
+        }
+    }
+}
+
+void game_step(GameState *state, const GameInput *input) {
+    const GameInput previous = state->previous;
+
+    state->previous = *input;
+    ++state->frame;
+
+    switch (state->mode) {
+    case GAME_MODE_PLAYING:
+        step_playing(state, input, &previous);
+        break;
+    case GAME_MODE_GAME_OVER:
+        step_game_over(state, input, &previous);
+        break;
+    case GAME_MODE_ENTER_INITIALS:
+        step_enter_initials(state, input, &previous);
+        break;
+    default:
+        step_title(state, input, &previous);
+        break;
+    }
+}
+
+/* ---- rendering ---- */
 
 /* World position (16.16) to screen coordinate; keeps 5 fractional bits so slow rocks move smoothly. */
 static inline __attribute__((always_inline)) int screen_x(const GameState *state, int32_t world_x) {
-    return (int) (mul16((int16_t) (world_x >> 11), (int16_t) state->x_scale) >> 13);
+    return state->field_x + (int) (mul16((int16_t) (world_x >> 11), (int16_t) state->x_scale) >> 13);
 }
 
 static inline __attribute__((always_inline)) int screen_y(const GameState *state, int32_t world_y) {
-    return (int) (mul16((int16_t) (world_y >> 11), (int16_t) state->y_scale) >> 13);
+    return state->field_y + (int) (mul16((int16_t) (world_y >> 11), (int16_t) state->y_scale) >> 13);
 }
 
 /* World-space offset (whole pixels) to screen-space offset. */
@@ -546,24 +753,24 @@ static inline __attribute__((always_inline)) int scale_y(const GameState *state,
     return (int) (mul16((int16_t) offset, (int16_t) state->y_scale) >> 8);
 }
 
-static void mark_rect(void *context, GameDirtyMarker mark_dirty, int x0, int y0, int x1, int y1) {
-    if (mark_dirty != NULL) {
-        mark_dirty(context, x0 - 1, y0 - 1, x1 + 1, y1 + 1);
+static void mark_rect(const GameRenderer *renderer, int x0, int y0, int x1, int y1) {
+    if (renderer->dirty != NULL) {
+        renderer->dirty(renderer->context, x0 - 1, y0 - 1, x1 + 1, y1 + 1);
     }
 }
 
 /* Draw a closed outline through the polygon drawer, or edge by edge with the line drawer. */
-static void draw_outline(void *context, GameLineDrawer draw_line, GamePolygonDrawer draw_polygon,
-                         const int16_t *points, int count, uint8_t color) {
+static void draw_outline(const GameRenderer *renderer, const int16_t *points, int count, uint8_t color) {
     int index;
 
-    if (draw_polygon != NULL) {
-        draw_polygon(context, points, count, color);
+    if (renderer->polygon != NULL) {
+        renderer->polygon(renderer->context, points, count, color);
         return;
     }
     for (index = 0; index < count; ++index) {
         const int next = (index + 1 == count) ? 0 : index + 1;
-        draw_line(context, points[index * 2], points[index * 2 + 1], points[next * 2], points[next * 2 + 1], color);
+        renderer->line(renderer->context, points[index * 2], points[index * 2 + 1], points[next * 2],
+                       points[next * 2 + 1], color);
     }
 }
 
@@ -592,8 +799,7 @@ static void grow_bounds(int *min_x, int *min_y, int *max_x, int *max_y, int x, i
     }
 }
 
-static void draw_ship(const GameState *state, void *context, GameLineDrawer draw_line,
-                      GamePolygonDrawer draw_polygon, GameDirtyMarker mark_dirty) {
+static void draw_ship(const GameState *state, const GameRenderer *renderer) {
     const GameShip *ship = &state->ship;
     const int center_x = screen_x(state, ship->x);
     const int center_y = screen_y(state, ship->y);
@@ -615,7 +821,7 @@ static void draw_ship(const GameState *state, void *context, GameLineDrawer draw
                    &points[index * 2], &points[index * 2 + 1]);
         grow_bounds(&min_x, &min_y, &max_x, &max_y, points[index * 2], points[index * 2 + 1]);
     }
-    draw_outline(context, draw_line, draw_polygon, points, 4, GAME_COLOR_SHIP);
+    draw_outline(renderer, points, 4, GAME_COLOR_SHIP);
 
     if (ship->thrusting) {
         const int length = 9 + (state->frame & 3);
@@ -626,17 +832,17 @@ static void draw_ship(const GameState *state, void *context, GameLineDrawer draw
         ship_point(state, -length, 0, cosine, sine, center_x, center_y, &tip[0], &tip[1]);
         ship_point(state, -5, -2, cosine, sine, center_x, center_y, &left[0], &left[1]);
         ship_point(state, -5, 2, cosine, sine, center_x, center_y, &right[0], &right[1]);
-        draw_line(context, left[0], left[1], tip[0], tip[1], GAME_COLOR_FLAME);
-        draw_line(context, right[0], right[1], tip[0], tip[1], GAME_COLOR_FLAME);
+        renderer->line(renderer->context, left[0], left[1], tip[0], tip[1], GAME_COLOR_FLAME);
+        renderer->line(renderer->context, right[0], right[1], tip[0], tip[1], GAME_COLOR_FLAME);
         grow_bounds(&min_x, &min_y, &max_x, &max_y, tip[0], tip[1]);
         grow_bounds(&min_x, &min_y, &max_x, &max_y, left[0], left[1]);
         grow_bounds(&min_x, &min_y, &max_x, &max_y, right[0], right[1]);
     }
 
-    mark_rect(context, mark_dirty, min_x, min_y, max_x, max_y);
+    mark_rect(renderer, min_x, min_y, max_x, max_y);
 }
 
-static void draw_bullets(const GameState *state, void *context, GameLineDrawer draw_line, GameDirtyMarker mark_dirty) {
+static void draw_bullets(const GameState *state, const GameRenderer *renderer) {
     int index;
     for (index = 0; index < GAME_MAX_BULLETS; ++index) {
         const GameBullet *bullet = &state->bullets[index];
@@ -648,8 +854,8 @@ static void draw_bullets(const GameState *state, void *context, GameLineDrawer d
         }
         x = screen_x(state, bullet->x);
         y = screen_y(state, bullet->y);
-        draw_line(context, x, y, x + 1, y, GAME_COLOR_SHIP);
-        mark_rect(context, mark_dirty, x, y, x + 1, y);
+        renderer->line(renderer->context, x, y, x + 1, y, GAME_COLOR_SHIP);
+        mark_rect(renderer, x, y, x + 1, y);
     }
 }
 
@@ -683,8 +889,7 @@ static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroi
     asteroid->cache_valid = 1;
 }
 
-static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, void *context, GameLineDrawer draw_line,
-                          GamePolygonDrawer draw_polygon, GameDirtyMarker mark_dirty) {
+static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, const GameRenderer *renderer) {
     const int center_x = screen_x(state, asteroid->x);
     const int center_y = screen_y(state, asteroid->y);
     const int count = asteroid->point_count;
@@ -700,22 +905,231 @@ static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, void *
         points[vertex * 2] = (int16_t) (center_x + asteroid->off_x[vertex]);
         points[vertex * 2 + 1] = (int16_t) (center_y + asteroid->off_y[vertex]);
     }
-    draw_outline(context, draw_line, draw_polygon, points, count, asteroid_color_table[asteroid->size]);
+    draw_outline(renderer, points, count, asteroid_color_table[asteroid->size]);
 
-    mark_rect(context, mark_dirty, center_x + asteroid->bound_x0, center_y + asteroid->bound_y0,
+    mark_rect(renderer, center_x + asteroid->bound_x0, center_y + asteroid->bound_y0,
               center_x + asteroid->bound_x1, center_y + asteroid->bound_y1);
 }
 
-void game_render(GameState *state, void *context, GameLineDrawer draw_line, GamePolygonDrawer draw_polygon,
-                 GameDirtyMarker mark_dirty) {
+/* ---- text screens ---- */
+
+static void format_number(char *out, uint32_t value, int digits) {
     int index;
 
-    draw_ship(state, context, draw_line, draw_polygon, mark_dirty);
-    draw_bullets(state, context, draw_line, mark_dirty);
-
-    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
-        if (state->asteroids[index].active) {
-            draw_asteroid(state, &state->asteroids[index], context, draw_line, draw_polygon, mark_dirty);
-        }
+    out[digits] = 0;
+    for (index = digits - 1; index >= 0; --index) {
+        out[index] = (char) ('0' + (value % 10u));
+        value /= 10u;
     }
+}
+
+static void put_text(const GameRenderer *renderer, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale) {
+    if (renderer->text != NULL) {
+        renderer->text(renderer->context, x, y, text, fg, bg, scale);
+    }
+}
+
+static int centered_x(const GameState *state, const char *text, int scale) {
+    const int cell = (scale == 2) ? 16 : 8;
+    const int width = (int) strlen(text) * cell;
+
+    return state->field_x + (((state->field_width - width) / 2) / cell) * cell;
+}
+
+/* Text centred on the playing field, y measured from the top of the field. */
+static void put_centered(const GameState *state, const GameRenderer *renderer, int y, const char *text,
+                         uint8_t fg, uint8_t scale) {
+    put_text(renderer, centered_x(state, text, scale), state->field_y + y, text, fg, GAME_COLOR_BLACK, scale);
+}
+
+/* The same, for text shown over the moving game: also reports its rectangle so it gets erased. */
+static void put_centered_overlay(const GameState *state, const GameRenderer *renderer, int y, const char *text,
+                                 uint8_t fg) {
+    const int x = centered_x(state, text, 1);
+    const int top = state->field_y + y;
+
+    put_text(renderer, x, top, text, fg, GAME_COLOR_BLACK, 1);
+    mark_rect(renderer, x, top, x + (int) strlen(text) * 8 - 1, top + 7);
+}
+
+static void draw_prompt(const GameState *state, const GameRenderer *renderer) {
+    put_centered(state, renderer, 124, "PRESS FIRE TO START",
+                 state->prompt_visible ? GAME_COLOR_YELLOW : GAME_COLOR_BLACK, 1);
+}
+
+static void draw_title_screen(const GameState *state, const GameRenderer *renderer) {
+    char line[24];
+    int index;
+
+    put_centered(state, renderer, 10, "ASTEROIDS", GAME_COLOR_SHIP, 2);
+    put_centered(state, renderer, 34, "A RETRO VECTOR ARCADE GAME", GAME_COLOR_GREY, 1);
+    put_centered(state, renderer, 54, "- HALL OF FAME -", GAME_COLOR_YELLOW, 1);
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        line[0] = (char) ('1' + index);
+        line[1] = '.';
+        line[2] = ' ';
+        memcpy(line + 3, state->high_scores[index].initials, INITIALS_LENGTH);
+        line[6] = ' ';
+        line[7] = ' ';
+        format_number(line + 8, state->high_scores[index].score, 6);
+        put_centered(state, renderer, 68 + index * 10, line, index == 0 ? GAME_COLOR_YELLOW : GAME_COLOR_WHITE, 1);
+    }
+    draw_prompt(state, renderer);
+    put_centered(state, renderer, 146, "A/D OR ARROWS TURN  W OR UP THRUST", GAME_COLOR_GREY, 1);
+    put_centered(state, renderer, 158, "SPACE FIRE  H HYPERSPACE  P PAUSE", GAME_COLOR_GREY, 1);
+}
+
+static void draw_game_over_screen(const GameState *state, const GameRenderer *renderer) {
+    char line[24];
+
+    put_centered(state, renderer, 44, "GAME OVER", GAME_COLOR_RED, 2);
+    memcpy(line, "YOUR SCORE ", 11);
+    format_number(line + 11, state->score, 6);
+    put_centered(state, renderer, 86, line, GAME_COLOR_WHITE, 1);
+    if (score_rank(state) >= 0) {
+        put_centered(state, renderer, 110, "NEW HIGH SCORE!", GAME_COLOR_YELLOW, 1);
+    }
+}
+
+static void draw_initials_screen(const GameState *state, const GameRenderer *renderer) {
+    char line[24];
+    char letter[2];
+    int index;
+    const int letters_x = state->field_x + ((state->field_width - INITIALS_LENGTH * 32) / 2 / 16) * 16;
+
+    put_centered(state, renderer, 26, "NEW HIGH SCORE!", GAME_COLOR_YELLOW, 1);
+    memcpy(line, "SCORE ", 6);
+    format_number(line + 6, state->score, 6);
+    put_centered(state, renderer, 46, line, GAME_COLOR_WHITE, 1);
+    put_centered(state, renderer, 74, "ENTER YOUR INITIALS", GAME_COLOR_WHITE, 1);
+
+    letter[1] = 0;
+    for (index = 0; index < INITIALS_LENGTH; ++index) {
+        letter[0] = state->entry[index];
+        put_text(renderer, letters_x + index * 32, state->field_y + 96, letter,
+                 index == state->entry_position ? GAME_COLOR_YELLOW : GAME_COLOR_WHITE, GAME_COLOR_BLACK, 2);
+        put_text(renderer, letters_x + index * 32, state->field_y + 118, index == state->entry_position ? "^" : " ",
+                 GAME_COLOR_YELLOW, GAME_COLOR_BLACK, 1);
+    }
+    put_centered(state, renderer, 146, "LEFT/RIGHT CHANGE  FIRE ACCEPT", GAME_COLOR_GREY, 1);
+}
+
+/* ---- HUD (in the frame above the playing field) ---- */
+
+static uint8_t hyperspace_percent(const GameState *state) {
+    if (state->ship.hyperspace_cooldown == 0) {
+        return 100;
+    }
+    return (uint8_t) (mul16((int16_t) (GAME_HYPERSPACE_RECHARGE_FRAMES - state->ship.hyperspace_cooldown), 205) >> 10);
+}
+
+static void draw_hud(const GameState *state, const GameRenderer *renderer) {
+    char text[16];
+    char icons[10];
+    const uint32_t high = (state->high_scores[0].score > state->score) ? state->high_scores[0].score : state->score;
+    int index;
+    int count;
+
+    memcpy(text, "SCORE ", 6);
+    format_number(text + 6, state->score % 1000000u, 6);
+    put_text(renderer, 8, 0, text, GAME_COLOR_YELLOW, GAME_COLOR_FRAME, 1);
+
+    memcpy(text, "HI ", 3);
+    format_number(text + 3, high % 1000000u, 6);
+    put_text(renderer, 120, 0, text, GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
+
+    memcpy(text, "WAVE ", 5);
+    format_number(text + 5, state->wave % 100u, 2);
+    put_text(renderer, 240, 0, text, GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
+
+    put_text(renderer, 8, 8, "LIVES ", GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
+    memset(icons, ' ', 8);
+    icons[8] = 0;
+    if (state->lives <= 6) {
+        for (index = 0; index < state->lives; ++index) {
+            icons[index] = 127;
+        }
+    } else {
+        icons[0] = 127;
+        icons[1] = 'X';
+        icons[2] = (char) ('0' + state->lives);
+    }
+    put_text(renderer, 56, 8, icons, GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
+
+    count = hyperspace_percent(state);
+    if (count >= 100) {
+        put_text(renderer, 120, 8, "HYPER READY ", GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
+    } else {
+        memcpy(text, "HYPER ", 6);
+        format_number(text + 6, (uint32_t) count, 2);
+        text[8] = '%';
+        text[9] = ' ';
+        text[10] = ' ';
+        text[11] = 0;
+        put_text(renderer, 120, 8, text, GAME_COLOR_GREY, GAME_COLOR_FRAME, 1);
+    }
+}
+
+static void update_hud(GameState *state, const GameRenderer *renderer) {
+    const uint32_t high = state->high_scores[0].score;
+    const uint8_t percent = hyperspace_percent(state);
+
+    if (state->hud_score != state->score || state->hud_high != high || state->hud_lives != state->lives ||
+        state->hud_wave != state->wave || state->hud_hyperspace != percent) {
+        state->hud_score = state->score;
+        state->hud_high = high;
+        state->hud_lives = state->lives;
+        state->hud_wave = state->wave;
+        state->hud_hyperspace = percent;
+        state->hud_refresh = 2;
+    }
+    if (state->hud_refresh > 0) {
+        draw_hud(state, renderer);
+        --state->hud_refresh;
+    }
+}
+
+void game_render(GameState *state, const GameRenderer *renderer) {
+    int index;
+
+    if (state->screen_refresh > 0 && renderer->clear_field != NULL) {
+        renderer->clear_field(renderer->context);
+    }
+
+    if (state->mode == GAME_MODE_PLAYING) {
+        draw_ship(state, renderer);
+        draw_bullets(state, renderer);
+        for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
+            if (state->asteroids[index].active) {
+                draw_asteroid(state, &state->asteroids[index], renderer);
+            }
+        }
+
+        if (state->paused) {
+            put_centered_overlay(state, renderer, 84, "PAUSED", GAME_COLOR_YELLOW);
+        } else if (state->banner_timer > 0) {
+            char banner[8];
+
+            memcpy(banner, "WAVE ", 5);
+            format_number(banner + 5, state->wave % 100u, 2);
+            put_centered_overlay(state, renderer, 60, banner, GAME_COLOR_WHITE);
+        }
+    } else if (state->screen_refresh > 0) {
+        if (state->mode == GAME_MODE_TITLE) {
+            draw_title_screen(state, renderer);
+        } else if (state->mode == GAME_MODE_GAME_OVER) {
+            draw_game_over_screen(state, renderer);
+        } else {
+            draw_initials_screen(state, renderer);
+        }
+        state->prompt_refresh = 0;
+    } else if (state->mode == GAME_MODE_TITLE && state->prompt_refresh > 0) {
+        draw_prompt(state, renderer);
+        --state->prompt_refresh;
+    }
+
+    if (state->screen_refresh > 0) {
+        --state->screen_refresh;
+    }
+    update_hud(state, renderer);
 }

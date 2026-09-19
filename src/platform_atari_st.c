@@ -1,6 +1,9 @@
 #include "platform.h"
 
+#include "st_text.h"
+
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #if defined(ATARI_ST_TARGET)
@@ -15,6 +18,17 @@
 #define ST_VIDEO_BASE_MID (*(volatile uint8_t *) 0xff8203UL)
 #define ST_HW_PALETTE ((volatile uint16_t *) 0xff8240UL)
 
+/* The playing field in 16-pixel groups and rows, for the rectangle clear. */
+#define FIELD_GROUP0 (PLATFORM_FIELD_X / 16)
+#define FIELD_GROUP1 ((PLATFORM_FIELD_X + PLATFORM_FIELD_WIDTH) / 16 - 1)
+#define FIELD_Y0 PLATFORM_FIELD_Y
+#define FIELD_Y1 (PLATFORM_FIELD_Y + PLATFORM_FIELD_HEIGHT - 1)
+#define FIELD_X0 PLATFORM_FIELD_X
+#define FIELD_X1 (PLATFORM_FIELD_X + PLATFORM_FIELD_WIDTH - 1)
+
+#define SCORE_FILE "ASTROIDS.SCO"
+#define MAX_DIRTY_RECTS 64
+
 extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
@@ -26,6 +40,13 @@ extern void st_ikbd_remove(void);
 /* Written by the IKBD interrupt handler in st_ikbd.S: 1 while the key is held. */
 volatile unsigned char st_key_state[128];
 
+typedef struct DirtyRect {
+    short x0;
+    short y0;
+    short x1;
+    short y1;
+} DirtyRect;
+
 static unsigned char screen_storage[2][SCREEN_BYTES + 255];
 static unsigned char *screen_pages[2];
 static unsigned char *draw_buffer;
@@ -34,17 +55,6 @@ static void *original_physbase;
 static void *original_logbase;
 static int original_resolution;
 static uint16_t original_palette[ST_PALETTE_COLORS];
-static PlatformConfig current_config;
-static unsigned char previous_toggle_state;
-#define MAX_DIRTY_RECTS 64
-
-typedef struct DirtyRect {
-    short x0;
-    short y0;
-    short x1;
-    short y1;
-} DirtyRect;
-
 /* Per screen page: what was drawn on it last time, so only that gets erased. */
 static DirtyRect dirty_rects[2][MAX_DIRTY_RECTS];
 static int dirty_count[2];
@@ -68,22 +78,15 @@ static void wait_vbl(void) {
     }
 }
 
-static void set_palette(const PlatformConfig *config) {
-    /* Lovable "Classic" theme, quantised to the ST's 3 bits per channel. The
-       line colours sit on single bitplanes (1, 2, 4, 8) for fast drawing. */
-    static const uint16_t low_palette[ST_PALETTE_COLORS] = {
-        0x001, 0x272, 0x777, 0x741,   /* background, ship+bullets, large rock, thrust flame */
-        0x467, 0x555, 0x333, 0x777,   /* medium rock */
-        0x247, 0x555, 0x666, 0x222,   /* small rock */
-        0x111, 0x210, 0x431, 0x764
+static void set_palette(void) {
+    /* Lovable "Classic" theme, quantised to the ST's 3 bits per channel. The line colours
+       (ship, rocks) sit on single bitplanes (1, 2, 4, 8) for fast drawing. */
+    static const uint16_t palette[ST_PALETTE_COLORS] = {
+        0x000, 0x272, 0x777, 0x741,   /* black field, ship+bullets, large rock, thrust flame */
+        0x467, 0x124, 0x770, 0x722,   /* medium rock, frame, yellow, red */
+        0x247, 0x555, 0x757, 0x333,   /* small rock, grey */
+        0x057, 0x444, 0x666, 0x111
     };
-    static const uint16_t medium_palette[ST_PALETTE_COLORS] = {
-        0x001, 0x272, 0x777, 0x467,
-        0x000, 0x000, 0x000, 0x000,
-        0x000, 0x000, 0x000, 0x000,
-        0x000, 0x000, 0x000, 0x000
-    };
-    const uint16_t *palette = (config->resolution == PLATFORM_RES_MEDIUM) ? medium_palette : low_palette;
     int i;
 
     for (i = 0; i < ST_PALETTE_COLORS; ++i) {
@@ -98,25 +101,32 @@ static void show_screen(const unsigned char *buffer) {
     ST_VIDEO_BASE_MID = (uint8_t) (address >> 8);
 }
 
-static void clear_screen(void) {
-    st_clear_buffer(draw_buffer);
+/* Fill a whole screen with the frame colour, then cut out the black playing field. */
+static void draw_frame(unsigned char *buffer) {
+    unsigned short *words = (unsigned short *) buffer;
+    int index;
+    int plane;
+
+    for (index = 0; index < SCREEN_BYTES / 8; ++index) {
+        for (plane = 0; plane < 4; ++plane) {
+            *words++ = (unsigned short) ((((GAME_COLOR_FRAME >> plane) & 1) != 0) ? 0xffffu : 0u);
+        }
+    }
+    st_clear_rect(buffer, FIELD_GROUP0, FIELD_GROUP1, FIELD_Y0, FIELD_Y1);
 }
 
-static void clear_all_screens(void) {
-    st_clear_buffer(screen_pages[0]);
-    st_clear_buffer(screen_pages[1]);
+static int page_index(void) {
+    return (draw_buffer == screen_pages[0]) ? 0 : 1;
 }
 
-/* Switch resolution through XBIOS, then take over the display registers. */
-static void enter_resolution(const PlatformConfig *config) {
-    int current = Getrez();
-
-    if (current != config->resolution) {
-        Setscreen((void *) -1L, (void *) -1L, config->resolution);
+static void enter_video(void) {
+    if (Getrez() != 0) {
+        Setscreen((void *) -1L, (void *) -1L, 0);
         wait_vbl();
         wait_vbl();
     }
-    clear_all_screens();
+    draw_frame(screen_pages[0]);
+    draw_frame(screen_pages[1]);
     dirty_count[0] = 0;
     dirty_count[1] = 0;
     dirty_full[0] = 0;
@@ -125,30 +135,11 @@ static void enter_resolution(const PlatformConfig *config) {
     draw_buffer = screen_pages[1];
     show_screen(show_buffer);
     wait_vbl();
-    set_palette(config);
+    set_palette();
     last_frame_clock = ST_FRCLOCK - 1;
 }
 
-static void plot_pixel(int x, int y, uint8_t color) {
-    const int words_per_group = (current_config.resolution == PLATFORM_RES_MEDIUM) ? 2 : 4;
-    const int row_offset = y * 160;
-    const int group_offset = (x >> 4) * words_per_group * 2;
-    const int bit = 15 - (x & 15);
-    unsigned short mask = (unsigned short) (1u << bit);
-    unsigned short *words = (unsigned short *) (draw_buffer + row_offset + group_offset);
-    int plane_count = (current_config.resolution == PLATFORM_RES_MEDIUM) ? 2 : 4;
-    int plane;
-
-    for (plane = 0; plane < plane_count; ++plane) {
-        if ((color >> plane) & 1u) {
-            words[plane] |= mask;
-        } else {
-            words[plane] &= (unsigned short) ~mask;
-        }
-    }
-}
-
-int platform_init(const PlatformConfig *config) {
+int platform_init(void) {
     static const char ikbd_game_mode[] = { 0x12, 0x1a };  /* mouse off, joysticks off */
     int i;
 
@@ -159,7 +150,7 @@ int platform_init(const PlatformConfig *config) {
     }
 
     if (Getrez() == 2) {
-        (void) Cconws("Atari colour monitor required (low or medium resolution).\r\n");
+        (void) Cconws("Atari colour monitor required.\r\n");
         if (entered_supervisor) {
             (void) Super((void *) saved_ssp);
             entered_supervisor = 0;
@@ -176,11 +167,9 @@ int platform_init(const PlatformConfig *config) {
 
     screen_pages[0] = aligned_screen(0);
     screen_pages[1] = aligned_screen(1);
-    current_config = *config;
-    previous_toggle_state = 0;
     memset((void *) st_key_state, 0, sizeof(st_key_state));
 
-    enter_resolution(config);
+    enter_video();
     (void) Ikbdws(1, ikbd_game_mode);
     st_ikbd_install();
     return 1;
@@ -209,24 +198,22 @@ void platform_shutdown(void) {
 void platform_poll_input(GameInput *input) {
     memset(input, 0, sizeof(*input));
 
-    input->left = (uint8_t) (st_key_state[0x1eu] || st_key_state[0x4bu]);
-    input->right = (uint8_t) (st_key_state[0x20u] || st_key_state[0x4du]);
-    input->thrust = (uint8_t) (st_key_state[0x11u] || st_key_state[0x48u]);
-    input->fire = st_key_state[0x39u];
-    {
-        const unsigned char toggle_state = (unsigned char) (st_key_state[0x32u] || st_key_state[0x0fu] || st_key_state[0x3fu]);
-        input->toggle_resolution = (uint8_t) (toggle_state && !previous_toggle_state);
-        previous_toggle_state = toggle_state;
-    }
-    input->exit_requested = (uint8_t) (st_key_state[0x10u] || st_key_state[0x01u]);
+    input->left = (uint8_t) (st_key_state[0x1eu] || st_key_state[0x4bu]);        /* A, left */
+    input->right = (uint8_t) (st_key_state[0x20u] || st_key_state[0x4du]);       /* D, right */
+    input->thrust = (uint8_t) (st_key_state[0x11u] || st_key_state[0x48u]);      /* W, up */
+    input->fire = st_key_state[0x39u];                                           /* space */
+    input->hyperspace = st_key_state[0x23u];                                     /* H */
+    input->start = (uint8_t) (st_key_state[0x39u] || st_key_state[0x1cu]);       /* space, return */
+    input->pause = st_key_state[0x19u];                                          /* P */
+    input->exit_requested = (uint8_t) (st_key_state[0x10u] || st_key_state[0x01u]);   /* Q, Esc */
 }
 
 void platform_begin_frame(void) {
-    const int page = (draw_buffer == screen_pages[0]) ? 0 : 1;
+    const int page = page_index();
     int index;
 
-    if (current_config.resolution != PLATFORM_RES_LOW || dirty_full[page]) {
-        clear_screen();
+    if (dirty_full[page]) {
+        st_clear_rect(draw_buffer, FIELD_GROUP0, FIELD_GROUP1, FIELD_Y0, FIELD_Y1);
     } else {
         for (index = 0; index < dirty_count[page]; ++index) {
             const DirtyRect *rect = &dirty_rects[page][index];
@@ -237,23 +224,28 @@ void platform_begin_frame(void) {
     dirty_full[page] = 0;
 }
 
+void platform_clear_field(void *context) {
+    (void) context;
+    st_clear_rect(draw_buffer, FIELD_GROUP0, FIELD_GROUP1, FIELD_Y0, FIELD_Y1);
+}
+
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1) {
-    const int page = (draw_buffer == screen_pages[0]) ? 0 : 1;
+    const int page = page_index();
     DirtyRect *rect;
 
     (void) context;
 
-    if (x0 < 0) {
-        x0 = 0;
+    if (x0 < FIELD_X0) {
+        x0 = FIELD_X0;
     }
-    if (y0 < 0) {
-        y0 = 0;
+    if (y0 < FIELD_Y0) {
+        y0 = FIELD_Y0;
     }
-    if (x1 >= current_config.width) {
-        x1 = current_config.width - 1;
+    if (x1 > FIELD_X1) {
+        x1 = FIELD_X1;
     }
-    if (y1 >= current_config.height) {
-        y1 = current_config.height - 1;
+    if (y1 > FIELD_Y1) {
+        y1 = FIELD_Y1;
     }
     if (x0 > x1 || y0 > y1) {
         return;
@@ -285,27 +277,27 @@ int platform_take_elapsed_frames(void) {
     return (int) elapsed;
 }
 
-/* Cohen-Sutherland outcodes for the inclusive rectangle [0, width-1] x [0, height-1]. */
-static int outcode(long x, long y, long width, long height) {
+/* Cohen-Sutherland outcodes for the playing field (inclusive bounds). */
+static int outcode(long x, long y) {
     int code = 0;
 
-    if (x < 0) {
+    if (x < FIELD_X0) {
         code |= 1;
-    } else if (x >= width) {
+    } else if (x > FIELD_X1) {
         code |= 2;
     }
-    if (y < 0) {
+    if (y < FIELD_Y0) {
         code |= 4;
-    } else if (y >= height) {
+    } else if (y > FIELD_Y1) {
         code |= 8;
     }
     return code;
 }
 
-/* Clip a line to the screen. Returns 0 when nothing of it is visible. */
-static int clip_line(long *x0, long *y0, long *x1, long *y1, long width, long height) {
-    int code0 = outcode(*x0, *y0, width, height);
-    int code1 = outcode(*x1, *y1, width, height);
+/* Clip a line to the playing field. Returns 0 when nothing of it is visible. */
+static int clip_line(long *x0, long *y0, long *x1, long *y1) {
+    int code0 = outcode(*x0, *y0);
+    int code1 = outcode(*x1, *y1);
     int guard;
 
     for (guard = 0; guard < 8; ++guard) {
@@ -321,30 +313,38 @@ static int clip_line(long *x0, long *y0, long *x1, long *y1, long width, long he
         }
 
         if (code & 8) {
-            y = height - 1;
+            y = FIELD_Y1;
             x = *x0 + ((*x1 - *x0) * (y - *y0)) / (*y1 - *y0);
         } else if (code & 4) {
-            y = 0;
+            y = FIELD_Y0;
             x = *x0 + ((*x1 - *x0) * (y - *y0)) / (*y1 - *y0);
         } else if (code & 2) {
-            x = width - 1;
+            x = FIELD_X1;
             y = *y0 + ((*y1 - *y0) * (x - *x0)) / (*x1 - *x0);
         } else {
-            x = 0;
+            x = FIELD_X0;
             y = *y0 + ((*y1 - *y0) * (x - *x0)) / (*x1 - *x0);
         }
 
         if (code == code0) {
             *x0 = x;
             *y0 = y;
-            code0 = outcode(x, y, width, height);
+            code0 = outcode(x, y);
         } else {
             *x1 = x;
             *y1 = y;
-            code1 = outcode(x, y, width, height);
+            code1 = outcode(x, y);
         }
     }
     return 0;
+}
+
+static int inside_field(int x, int y) {
+    return x >= FIELD_X0 && x <= FIELD_X1 && y >= FIELD_Y0 && y <= FIELD_Y1;
+}
+
+static long plane_offset_for(uint8_t color) {
+    return (color == 1) ? 0 : (color == 2) ? 2 : (color == 4) ? 4 : 6;
 }
 
 void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t color) {
@@ -352,91 +352,51 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
     long cy0 = y0;
     long cx1 = x1;
     long cy1 = y1;
-    int dx;
-    int sx;
-    int dy;
-    int sy;
-    int err;
 
     (void) context;
 
-    if ((unsigned) x0 >= current_config.width || (unsigned) x1 >= current_config.width ||
-        (unsigned) y0 >= current_config.height || (unsigned) y1 >= current_config.height) {
-        if (!clip_line(&cx0, &cy0, &cx1, &cy1, current_config.width, current_config.height)) {
+    if (!inside_field(x0, y0) || !inside_field(x1, y1)) {
+        if (!clip_line(&cx0, &cy0, &cx1, &cy1)) {
             return;
         }
     }
 
-    if (current_config.resolution == PLATFORM_RES_LOW) {
-        if (color == 1 || color == 2 || color == 4 || color == 8) {
-            const long plane_offset = (color == 1) ? 0 : (color == 2) ? 2 : (color == 4) ? 4 : 6;
-            st_draw_line_plane(draw_buffer, cx0, cy0, cx1, cy1, plane_offset);
-        } else {
-            st_draw_line_low(draw_buffer, cx0, cy0, cx1, cy1, color);
-        }
-        return;
-    }
-
-    /* Medium resolution only has four colours: fold the single-plane colours onto them. */
-    if (color > 2) {
-        color = 3;
-    }
-
-    x0 = (int) cx0;
-    y0 = (int) cy0;
-    x1 = (int) cx1;
-    y1 = (int) cy1;
-    dx = (x0 < x1) ? (x1 - x0) : (x0 - x1);
-    sx = (x0 < x1) ? 1 : -1;
-    dy = (y0 < y1) ? -(y1 - y0) : -(y0 - y1);
-    sy = (y0 < y1) ? 1 : -1;
-    err = dx + dy;
-
-    for (;;) {
-        /* one error value for both tests: testing again after err changed can step past the end point */
-        const int doubled_error = 2 * err;
-
-        plot_pixel(x0, y0, color);
-        if (x0 == x1 && y0 == y1) {
-            break;
-        }
-        if (doubled_error >= dy) {
-            err += dy;
-            x0 += sx;
-        }
-        if (doubled_error <= dx) {
-            err += dx;
-            y0 += sy;
-        }
+    if (color == 1 || color == 2 || color == 4 || color == 8) {
+        st_draw_line_plane(draw_buffer, cx0, cy0, cx1, cy1, plane_offset_for(color));
+    } else {
+        st_draw_line_low(draw_buffer, cx0, cy0, cx1, cy1, color);
     }
 }
 
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color) {
     int index;
 
-    if (current_config.resolution == PLATFORM_RES_LOW && (color == 1 || color == 2 || color == 4 || color == 8)) {
+    if (color == 1 || color == 2 || color == 4 || color == 8) {
         int inside = 1;
 
         for (index = 0; index < count; ++index) {
-            if ((unsigned) points[index * 2] >= current_config.width ||
-                (unsigned) points[index * 2 + 1] >= current_config.height) {
+            if (!inside_field(points[index * 2], points[index * 2 + 1])) {
                 inside = 0;
                 break;
             }
         }
         if (inside) {
-            const long plane_offset = (color == 1) ? 0 : (color == 2) ? 2 : (color == 4) ? 4 : 6;
-            st_draw_poly_plane(draw_buffer, points, count, plane_offset);
+            st_draw_poly_plane(draw_buffer, points, count, plane_offset_for(color));
             return;
         }
     }
 
-    /* off-screen parts, medium resolution or a mixed-plane colour: edge by edge, with clipping */
+    /* partly off the field, or a mixed-plane colour: edge by edge, with clipping */
     for (index = 0; index < count; ++index) {
         const int next = (index + 1 == count) ? 0 : index + 1;
         platform_draw_line(context, points[index * 2], points[index * 2 + 1], points[next * 2],
                            points[next * 2 + 1], color);
     }
+}
+
+void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale) {
+    (void) context;
+    st_text_draw(draw_buffer, x, y, text, fg, bg, scale);
 }
 
 void platform_end_frame(void) {
@@ -451,26 +411,28 @@ void platform_end_frame(void) {
     show_buffer = finished;
 }
 
-int platform_cycle_resolution(PlatformConfig *config) {
-    if (config->resolution == PLATFORM_RES_LOW) {
-        config->resolution = PLATFORM_RES_MEDIUM;
-        config->width = 640;
-        config->height = 200;
-    } else {
-        config->resolution = PLATFORM_RES_LOW;
-        config->width = 320;
-        config->height = 200;
-    }
+int platform_load_scores(uint8_t *data, int size) {
+    FILE *file = fopen(SCORE_FILE, "rb");
+    int count = 0;
 
-    current_config = *config;
-    previous_toggle_state = 1;
-    enter_resolution(config);
-    return 1;
+    if (file != NULL) {
+        count = (int) fread(data, 1, (size_t) size, file);
+        fclose(file);
+    }
+    return count;
+}
+
+void platform_save_scores(const uint8_t *data, int size) {
+    FILE *file = fopen(SCORE_FILE, "wb");
+
+    if (file != NULL) {
+        (void) fwrite(data, 1, (size_t) size, file);
+        fclose(file);
+    }
 }
 
 #else
-int platform_init(const PlatformConfig *config) {
-    (void) config;
+int platform_init(void) {
     return 0;
 }
 
@@ -493,14 +455,28 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
     (void) color;
 }
 
-void platform_end_frame(void) {
-}
-
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color) {
     (void) context;
     (void) points;
     (void) count;
     (void) color;
+}
+
+void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale) {
+    (void) context;
+    (void) x;
+    (void) y;
+    (void) text;
+    (void) fg;
+    (void) bg;
+    (void) scale;
+}
+
+void platform_clear_field(void *context) {
+    (void) context;
+}
+
+void platform_end_frame(void) {
 }
 
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1) {
@@ -515,8 +491,14 @@ int platform_take_elapsed_frames(void) {
     return 1;
 }
 
-int platform_cycle_resolution(PlatformConfig *config) {
-    (void) config;
+int platform_load_scores(uint8_t *data, int size) {
+    (void) data;
+    (void) size;
     return 0;
+}
+
+void platform_save_scores(const uint8_t *data, int size) {
+    (void) data;
+    (void) size;
 }
 #endif

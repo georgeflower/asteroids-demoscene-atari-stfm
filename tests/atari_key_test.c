@@ -22,16 +22,12 @@ static void log_line(const char *text) {
 }
 
 int main(void) {
-    PlatformConfig config;
     GameInput input;
     char previous[160];
     char text[160];
     int frame;
 
-    config.resolution = PLATFORM_RES_LOW;
-    config.width = 320;
-    config.height = 200;
-    if (!platform_init(&config)) {
+    if (!platform_init()) {
         return 1;
     }
 
@@ -48,8 +44,8 @@ int main(void) {
                 length += sprintf(text + length, " %02x", index);
             }
         }
-        length += sprintf(text + length, " | L%d R%d T%d F%d Q%d M%d", input.left, input.right, input.thrust,
-                          input.fire, input.exit_requested, input.toggle_resolution);
+        length += sprintf(text + length, " | L%d R%d T%d F%d H%d S%d P%d Q%d", input.left, input.right, input.thrust,
+                          input.fire, input.hyperspace, input.start, input.pause, input.exit_requested);
         if (strcmp(text, previous) != 0) {
             char stamped[200];
             sprintf(stamped, "f%d %s", frame, text);

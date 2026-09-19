@@ -3,7 +3,11 @@
  *  - st_draw_poly_plane must match st_draw_line_plane edge by edge
  *  - st_draw_line_plane must match the original four-plane st_draw_line_low
  *  - st_clear_rect must match a plain C reference
+ *  - st_text_draw must match a pixel-by-pixel reference, at both text scales
  */
+#include "font_data.h"
+#include "st_text.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -148,10 +152,113 @@ static void test_clear_rect(void) {
     }
 }
 
+
+/* ---- text ---- */
+
+static int reference_glyph_row(char ch, int row) {
+    int code = (unsigned char) ch;
+
+    if (code >= 'a' && code <= 'z') {
+        code -= 32;
+    }
+    if (code == 127) {
+        return font_data[95][row];
+    }
+    if (code < 32 || code > 126) {
+        code = 32;
+    }
+    return font_data[code - 32][row];
+}
+
+/* Write one pixel of palette index `color` into a planar buffer, plane by plane. */
+static void reference_pixel(unsigned char *buffer, int x, int y, int color) {
+    int plane;
+
+    for (plane = 0; plane < 4; ++plane) {
+        unsigned char *target = buffer + y * 160 + (x >> 4) * 8 + plane * 2 + ((x >> 3) & 1);
+        const unsigned char mask = (unsigned char) (0x80 >> (x & 7));
+
+        if ((color >> plane) & 1) {
+            *target = (unsigned char) (*target | mask);
+        } else {
+            *target = (unsigned char) (*target & ~mask);
+        }
+    }
+}
+
+static void reference_text(unsigned char *buffer, int x, int y, const char *text, int fg, int bg, int scale) {
+    const int cell = (scale == 2) ? 16 : 8;
+
+    x -= x % cell;
+    for (; *text != 0; ++text, x += cell) {
+        int row;
+        int column;
+
+        for (row = 0; row < 8; ++row) {
+            const int bits = reference_glyph_row(*text, row);
+            for (column = 0; column < 8; ++column) {
+                const int color = (bits & (0x80 >> column)) ? fg : bg;
+                int dx;
+                int dy;
+
+                for (dy = 0; dy < scale; ++dy) {
+                    for (dx = 0; dx < scale; ++dx) {
+                        reference_pixel(buffer, x + column * scale + dx, y + row * scale + dy, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void test_text(void) {
+    static const char *const samples[] = {
+        "SCORE 001234", "HYPER 50%  ", "A/D OR ARROWS TURN  W OR UP THRUST", "lower case", "!?:.-,<=>()' _^*+/",
+        "0123456789", " X9"
+    };
+    int trial;
+
+    for (trial = 0; trial < 300; ++trial) {
+        const char *text = samples[trial % 7];
+        const int scale = 1 + (trial % 3 == 0);
+        const int cell = (scale == 2) ? 16 : 8;
+        const int length = (int) strlen(text);
+        const int width = length * cell;
+        const int max_x = WIDTH - width;
+        int x;
+        int y;
+        int fg = (int) rand_below(16);
+        int bg = (int) rand_below(16);
+
+        if (max_x < 0) {
+            continue;
+        }
+        x = (int) rand_below((unsigned) max_x + 1) + (int) (trial % 5);   /* not always aligned: rounds down */
+        if (x + width > WIDTH) {
+            x = max_x;
+        }
+        y = (int) rand_below((unsigned) (HEIGHT - 8 * scale + 1));
+
+        /* a busy background: whatever the text does not touch must stay as it was */
+        for (x = 0; x < SCREEN_BYTES; ++x) {
+            buffer_a[x] = (unsigned char) (x * 7 + trial);
+            buffer_b[x] = buffer_a[x];
+        }
+        x = (int) rand_below((unsigned) max_x + 1);
+        st_text_draw(buffer_a, x, y, text, fg, bg, scale);
+        reference_text(buffer_b, x, y, text, fg, bg, scale);
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("text, sample", trial % 7);
+        }
+    }
+}
+
 int main(void) {
     test_polygons();
     test_plane_matches_four_plane_drawer();
     test_clear_rect();
+    test_text();
     printf("%d checks, %d failures\n", checks, failures);
     printf("press a key\n");
     getchar();

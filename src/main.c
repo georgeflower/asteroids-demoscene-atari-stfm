@@ -2,55 +2,48 @@
 #include "platform.h"
 
 #include <stddef.h>
-#include <string.h>
 
-static void select_config(int argc, char **argv, PlatformConfig *config) {
-    int index;
-
-    config->resolution = PLATFORM_RES_LOW;
-    config->width = 320;
-    config->height = 200;
-
-    for (index = 1; index < argc; ++index) {
-        if (strcmp(argv[index], "--medium") == 0 || strcmp(argv[index], "medium") == 0 || strcmp(argv[index], "-m") == 0) {
-            config->resolution = PLATFORM_RES_MEDIUM;
-            config->width = 640;
-            config->height = 200;
-        }
-    }
-}
-
-int main(int argc, char **argv) {
-    PlatformConfig config;
+int main(void) {
     GameState game;
     GameInput input;
+    GameRenderer renderer;
+    uint8_t score_file[GAME_SCORE_FILE_BYTES];
     int steps;
 
-    select_config(argc, argv, &config);
-    if (!platform_init(&config)) {
+    renderer.context = NULL;
+    renderer.line = platform_draw_line;
+    renderer.polygon = platform_draw_polygon;
+    renderer.dirty = platform_mark_dirty;
+    renderer.text = platform_draw_text;
+    renderer.clear_field = platform_clear_field;
+
+    if (!platform_init()) {
         return 1;
     }
 
-    game_init(&game, config.width, config.height);
+    game_init(&game, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
+    if (platform_load_scores(score_file, (int) sizeof(score_file)) == (int) sizeof(score_file)) {
+        (void) game_scores_unpack(&game, score_file);
+    }
 
     for (;;) {
         platform_poll_input(&input);
         if (input.exit_requested) {
             break;
         }
-        if (input.toggle_resolution) {
-            if (!platform_cycle_resolution(&config)) {
-                break;
-            }
-            game_set_resolution(&game, config.width, config.height);
-        }
 
         /* one game step per vertical blank, so the game keeps its speed when a frame takes longer */
         for (steps = platform_take_elapsed_frames(); steps > 0; --steps) {
             game_step(&game, &input);
         }
+        if (game.scores_changed) {
+            game_scores_pack(&game, score_file);
+            platform_save_scores(score_file, (int) sizeof(score_file));
+            game.scores_changed = 0;
+        }
+
         platform_begin_frame();
-        game_render(&game, NULL, platform_draw_line, platform_draw_polygon, platform_mark_dirty);
+        game_render(&game, &renderer);
         platform_end_frame();
     }
 

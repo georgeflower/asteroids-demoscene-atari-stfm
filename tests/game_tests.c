@@ -3,6 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The real playing-field layout (PLATFORM_FIELD_* in platform.h). */
+#define FIELD_X 16
+#define FIELD_Y 16
+#define FIELD_W 288
+#define FIELD_H 176
+
 static int failures;
 static int checks;
 
@@ -15,12 +21,128 @@ static int checks;
         } \
     } while (0)
 
-static const GameInput no_input = {0, 0, 0, 0, 0, 0};
+static const GameInput no_input = {0, 0, 0, 0, 0, 0, 0, 0};
 
-/* Start in normal play; game_init() itself starts in the attract demo. */
-static void init_playing(GameState *state, uint16_t width, uint16_t height) {
-    game_init(state, width, height);
-    state->demo_mode = 0;
+/* ---- capture renderer ---- */
+
+#define MAX_LINES 600
+#define MAX_RECTS 100
+#define MAX_TEXTS 40
+
+typedef struct TextCall {
+    int x;
+    int y;
+    int fg;
+    int bg;
+    int scale;
+    char text[40];
+} TextCall;
+
+static int lines[MAX_LINES][4];
+static int line_count;
+static int color_counts[16];
+static int rects[MAX_RECTS][4];
+static int rect_count;
+static TextCall texts[MAX_TEXTS];
+static int text_count;
+static int clear_calls;
+
+static void reset_capture(void) {
+    line_count = 0;
+    rect_count = 0;
+    text_count = 0;
+    clear_calls = 0;
+    memset(color_counts, 0, sizeof(color_counts));
+}
+
+static void capture_line(void *context, int x0, int y0, int x1, int y1, uint8_t color) {
+    (void) context;
+    if (line_count < MAX_LINES) {
+        lines[line_count][0] = x0;
+        lines[line_count][1] = y0;
+        lines[line_count][2] = x1;
+        lines[line_count][3] = y1;
+    }
+    ++line_count;
+    ++color_counts[color & 15];
+}
+
+static void capture_rect(void *context, int x0, int y0, int x1, int y1) {
+    (void) context;
+    if (rect_count < MAX_RECTS) {
+        rects[rect_count][0] = x0;
+        rects[rect_count][1] = y0;
+        rects[rect_count][2] = x1;
+        rects[rect_count][3] = y1;
+    }
+    ++rect_count;
+}
+
+static void capture_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale) {
+    (void) context;
+    if (text_count < MAX_TEXTS) {
+        texts[text_count].x = x;
+        texts[text_count].y = y;
+        texts[text_count].fg = fg;
+        texts[text_count].bg = bg;
+        texts[text_count].scale = scale;
+        strncpy(texts[text_count].text, text, sizeof(texts[text_count].text) - 1);
+        texts[text_count].text[sizeof(texts[text_count].text) - 1] = 0;
+    }
+    ++text_count;
+}
+
+static void capture_clear(void *context) {
+    (void) context;
+    ++clear_calls;
+}
+
+static GameRenderer make_renderer(void) {
+    GameRenderer renderer;
+
+    renderer.context = NULL;
+    renderer.line = capture_line;
+    renderer.polygon = NULL;
+    renderer.dirty = capture_rect;
+    renderer.text = capture_text;
+    renderer.clear_field = capture_clear;
+    return renderer;
+}
+
+static void render(GameState *state) {
+    const GameRenderer renderer = make_renderer();
+
+    reset_capture();
+    game_render(state, &renderer);
+}
+
+static int has_text(const char *wanted) {
+    int index;
+
+    for (index = 0; index < text_count && index < MAX_TEXTS; ++index) {
+        if (strcmp(texts[index].text, wanted) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const TextCall *find_text(const char *wanted) {
+    int index;
+
+    for (index = 0; index < text_count && index < MAX_TEXTS; ++index) {
+        if (strcmp(texts[index].text, wanted) == 0) {
+            return &texts[index];
+        }
+    }
+    return NULL;
+}
+
+/* ---- helpers ---- */
+
+static void init_playing(GameState *state) {
+    game_init(state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    game_start(state);
 }
 
 static int count_asteroids(const GameState *state, int size) {
@@ -46,22 +168,82 @@ static void clear_field(GameState *state) {
     state->asteroids[0].y = 5L << GAME_FIX_SHIFT;
 }
 
-static void test_initial_wave(void) {
+static void put_rock_on_ship(GameState *state, int size) {
+    state->asteroids[1] = state->asteroids[0];
+    state->asteroids[1].size = (uint8_t) size;
+    state->asteroids[1].x = state->ship.x;
+    state->asteroids[1].y = state->ship.y;
+}
+
+/* ---- tests: state and flow ---- */
+
+static void test_initial_state(void) {
     GameState state;
+    int index;
 
-    game_init(&state, 320, 200);
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
 
-    CHECK(state.width == 320);
-    CHECK(state.height == 200);
-    CHECK(state.x_scale == 256);
-    CHECK(state.y_scale == 213);
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(state.field_x == FIELD_X && state.field_y == FIELD_Y);
+    CHECK(state.field_width == FIELD_W && state.field_height == FIELD_H);
+    CHECK(state.x_scale == 230);   /* 288 / 320 */
+    CHECK(state.y_scale == 187);   /* 176 / 240 */
+    CHECK(state.lives == 3);
+    CHECK(count_asteroids(&state, 0) == 0);
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        CHECK(state.high_scores[index].score == 0);
+        CHECK(strcmp(state.high_scores[index].initials, "---") == 0);
+    }
+}
+
+static void test_start_from_title(void) {
+    GameState state;
+    GameInput space = {0, 0, 0, 1, 0, 1, 0, 0};
+    int frame;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    for (frame = 0; frame < 10; ++frame) {
+        game_step(&state, &no_input);
+    }
+    CHECK(state.mode == GAME_MODE_TITLE);
+
+    game_step(&state, &space);
+    CHECK(state.mode == GAME_MODE_PLAYING);
     CHECK(state.wave == 1);
     CHECK(state.lives == 3);
-    CHECK(state.demo_mode == 1);   /* starts as the attract demo */
-    CHECK(count_asteroids(&state, 0) == 6);
+    CHECK(state.score == 0);
     CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 6);
-    CHECK(state.ship.angle == 49152u);
-    CHECK(state.ship.invulnerability == 100);
+    CHECK(state.banner_timer > 0);
+    CHECK(state.screen_refresh == 2);
+
+    /* holding the key does not restart anything */
+    state.score = 40;
+    game_step(&state, &space);
+    CHECK(state.score >= 40);
+    CHECK(state.mode == GAME_MODE_PLAYING);
+}
+
+static void test_no_autopilot(void) {
+    GameState state;
+    int frame;
+    int bullets_seen = 0;
+    int index;
+    uint16_t angle;
+
+    init_playing(&state);
+    angle = state.ship.angle;
+    for (frame = 0; frame < 300; ++frame) {
+        state.ship.invulnerability = 255;
+        game_step(&state, &no_input);
+        for (index = 0; index < GAME_MAX_BULLETS; ++index) {
+            bullets_seen += state.bullets[index].active;
+        }
+    }
+    CHECK(state.mode == GAME_MODE_PLAYING);
+    CHECK(state.ship.angle == angle);
+    CHECK(state.ship.vx == 0 && state.ship.vy == 0);
+    CHECK(!state.ship.thrusting);
+    CHECK(bullets_seen == 0);
 }
 
 static void test_wave_sizes(void) {
@@ -69,13 +251,10 @@ static void test_wave_sizes(void) {
     int wave;
     const int expected[] = {0, 6, 8, 10, 12, 14, 16, 18, 20, 20, 20};
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     for (wave = 1; wave <= 10; ++wave) {
         memset(state.asteroids, 0, sizeof(state.asteroids));
         state.wave = (uint8_t) (wave - 1);
-        clear_field(&state);
-        state.asteroids[0].active = 0;
-        state.ship.invulnerability = 100;
         game_step(&state, &no_input);
         CHECK(state.wave == wave);
         CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == expected[wave]);
@@ -87,7 +266,7 @@ static void test_asteroid_shapes(void) {
     int index;
     int point;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
         const GameAsteroid *asteroid = &state.asteroids[index];
         if (!asteroid->active) {
@@ -105,7 +284,7 @@ static void test_bullet_breaks_asteroids_and_scores(void) {
     const int expected_score[] = {0, 100, 50, 20};
     int size;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
 
     for (size = GAME_ASTEROID_LARGE; size >= GAME_ASTEROID_SMALL; --size) {
         clear_field(&state);
@@ -133,7 +312,7 @@ static void test_bullet_breaks_asteroids_and_scores(void) {
 static void test_ship_wraps_across_screen(void) {
     GameState state;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     state.ship.x = -1;
     state.ship.y = -1;
 
@@ -147,11 +326,11 @@ static void test_ship_wraps_across_screen(void) {
 
 static void test_turning_speed(void) {
     GameState state;
-    GameInput right = {0, 1, 0, 0, 0, 0};
-    GameInput left = {1, 0, 0, 0, 0, 0};
+    GameInput right = {0, 1, 0, 0, 0, 0, 0, 0};
+    GameInput left = {1, 0, 0, 0, 0, 0, 0, 0};
     int frame;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     clear_field(&state);
     for (frame = 0; frame < 100; ++frame) {
         game_step(&state, &right);
@@ -167,13 +346,13 @@ static void test_turning_speed(void) {
 
 static void test_thrust_and_drag(void) {
     GameState state;
-    GameInput thrust = {0, 0, 1, 0, 0, 0};
-    GameInput turn = {1, 0, 0, 0, 0, 0};
+    GameInput thrust = {0, 0, 1, 0, 0, 0, 0, 0};
+    GameInput turn = {1, 0, 0, 0, 0, 0, 0, 0};
     int32_t speed_after_ten = 0;
     int32_t coasting;
     int frame;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     clear_field(&state);
     state.ship.invulnerability = 255;
 
@@ -193,7 +372,7 @@ static void test_thrust_and_drag(void) {
     CHECK(-state.ship.vy <= 251658L + 300);
     CHECK(-state.ship.vy > 200000L);
 
-    /* coasting slows the ship by about 1.2% per frame (turning keeps manual mode without adding speed) */
+    /* coasting slows the ship by about 1.2% per frame (turning does not add speed) */
     coasting = -state.ship.vy;
     for (frame = 0; frame < 50; ++frame) {
         game_step(&state, &turn);
@@ -204,12 +383,11 @@ static void test_thrust_and_drag(void) {
 
 static void test_bullets(void) {
     GameState state;
-    GameInput fire = {0, 0, 0, 1, 0, 0};
+    GameInput fire = {0, 0, 0, 1, 0, 0, 0, 0};
     int frame;
-    int alive_frames = 0;
     int fired = 0;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     clear_field(&state);
     state.ship.invulnerability = 255;
 
@@ -229,16 +407,12 @@ static void test_bullets(void) {
         if (active > fired) {
             fired = active;
         }
-        if (state.bullets[0].active) {
-            ++alive_frames;
-        }
     }
-    /* a shot lives 50 frames (60 @60 Hz), and the gun fires every 12 frames */
+    /* a shot lives 50 frames and the gun fires every 12: about four in the air at once */
     CHECK(fired >= 4 && fired <= GAME_MAX_BULLETS);
-    CHECK(alive_frames > 0);
 
     /* a single shot flies for 50 frames: 49 left after the frame it was fired */
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     clear_field(&state);
     state.ship.invulnerability = 255;
     game_step(&state, &fire);
@@ -253,81 +427,12 @@ static void test_bullets(void) {
     CHECK(!state.bullets[0].active);
 }
 
-static void test_first_key_starts_a_game_and_keeps_control(void) {
-    GameState state;
-    GameInput left = {1, 0, 0, 0, 0, 0};
-    uint16_t angle_after_turn;
-    int frame;
-    int bullets_seen = 0;
-    int index;
-
-    game_init(&state, 320, 200);
-    state.score = 500;
-    state.lives = 1;
-    CHECK(state.demo_mode == 1);
-
-    /* the attract demo plays by itself without input... */
-    for (frame = 0; frame < 30; ++frame) {
-        game_step(&state, &no_input);
-    }
-    CHECK(state.demo_mode == 1);
-    CHECK(state.ship.angle != 49152u || state.ship.vx != 0 || state.ship.vy != 0);
-
-    /* ...and the first key press starts a fresh game and hands over control */
-    game_step(&state, &left);
-    CHECK(state.demo_mode == 0);
-    CHECK(state.score == 0);
-    CHECK(state.lives == 3);
-    CHECK(state.wave == 1);
-    CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 6);
-    angle_after_turn = state.ship.angle;
-    CHECK(angle_after_turn == (uint16_t) (49152u - 626u));
-
-    /* letting go of the keys must NOT bring the autopilot back: no turning, no thrust, no shots */
-    for (frame = 0; frame < 200; ++frame) {
-        state.ship.invulnerability = 255;
-        game_step(&state, &no_input);
-        for (index = 0; index < GAME_MAX_BULLETS; ++index) {
-            bullets_seen += state.bullets[index].active;
-        }
-    }
-    CHECK(state.demo_mode == 0);
-    CHECK(state.ship.angle == angle_after_turn);
-    CHECK(state.ship.vx == 0 && state.ship.vy == 0);
-    CHECK(bullets_seen == 0);
-}
-
-static void test_game_over_returns_to_the_demo(void) {
-    GameState state;
-
-    init_playing(&state, 320, 200);
-    clear_field(&state);
-    state.score = 1234;
-    state.lives = 1;
-    state.asteroids[1] = state.asteroids[0];
-    state.asteroids[1].size = GAME_ASTEROID_LARGE;
-    state.asteroids[1].x = state.ship.x;
-    state.asteroids[1].y = state.ship.y;
-    state.ship.invulnerability = 0;
-
-    game_step(&state, &no_input);
-
-    CHECK(state.demo_mode == 1);
-    CHECK(state.lives == 3);
-    CHECK(state.score == 0);
-    CHECK(state.wave == 1);
-    CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 6);
-}
-
 static void test_ship_collision(void) {
     GameState state;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     clear_field(&state);
-    state.asteroids[1] = state.asteroids[0];
-    state.asteroids[1].size = GAME_ASTEROID_LARGE;
-    state.asteroids[1].x = state.ship.x;
-    state.asteroids[1].y = state.ship.y;
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
 
     /* invulnerable after spawning: no damage */
     state.ship.invulnerability = 30;
@@ -337,6 +442,7 @@ static void test_ship_collision(void) {
     state.ship.invulnerability = 0;
     game_step(&state, &no_input);
     CHECK(state.lives == 2);
+    CHECK(state.mode == GAME_MODE_PLAYING);
     CHECK(state.ship.invulnerability == 100);
     CHECK(state.ship.x == ((long) (GAME_WORLD_WIDTH / 2) << GAME_FIX_SHIFT));
 }
@@ -344,13 +450,14 @@ static void test_ship_collision(void) {
 static void test_wave_clear_advances(void) {
     GameState state;
 
-    init_playing(&state, 320, 200);
+    init_playing(&state);
     memset(state.asteroids, 0, sizeof(state.asteroids));
     game_step(&state, &no_input);
 
     CHECK(state.wave == 2);
     CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 8);
     CHECK(state.ship.invulnerability == 100);
+    CHECK(state.banner_timer > 0);
 }
 
 static void test_asteroid_speeds_scale_with_wave(void) {
@@ -365,7 +472,7 @@ static void test_asteroid_speeds_scale_with_wave(void) {
         int rocks = 0;
         int round;
 
-        init_playing(&state, 320, 200);
+        init_playing(&state);
         for (round = 0; round < 6; ++round) {
             memset(state.asteroids, 0, sizeof(state.asteroids));
             state.wave = (uint8_t) (wave - 1);
@@ -394,46 +501,360 @@ static void test_asteroid_speeds_scale_with_wave(void) {
     CHECK(total_wave9 < total_wave1 * 17 / 10);
 }
 
-static int line_count;
-static int lines_out_of_range;
-static int color_counts[16];
+/* ---- tests: extra lives, hyperspace, pause ---- */
 
-static void count_line(void *context, int x0, int y0, int x1, int y1, uint8_t color) {
-    (void) context;
-    ++line_count;
-    if (x0 < -60 || x0 > 400 || x1 < -60 || x1 > 400 || y0 < -60 || y0 > 260 || y1 < -60 || y1 > 260) {
-        ++lines_out_of_range;
-    }
-    ++color_counts[color & 15];
+static void test_extra_lives(void) {
+    GameState state;
+
+    init_playing(&state);
+    clear_field(&state);
+    CHECK(state.next_extra_life == 10000);
+
+    state.score = 9990;
+    state.asteroids[1].active = 1;
+    state.asteroids[1].size = GAME_ASTEROID_LARGE;
+    state.asteroids[1].point_count = 8;
+    state.asteroids[1].x = 100L << GAME_FIX_SHIFT;
+    state.asteroids[1].y = 50L << GAME_FIX_SHIFT;
+    state.bullets[0].active = 1;
+    state.bullets[0].life = 4;
+    state.bullets[0].x = state.asteroids[1].x;
+    state.bullets[0].y = state.asteroids[1].y;
+
+    game_step(&state, &no_input);
+    CHECK(state.score == 10010);
+    CHECK(state.lives == 4);
+    CHECK(state.next_extra_life == 20000);
+
+    /* lives are capped at 9 */
+    state.lives = 9;
+    state.score = 19990;
+    state.asteroids[1].active = 1;
+    state.asteroids[1].size = GAME_ASTEROID_LARGE;
+    state.asteroids[1].x = 100L << GAME_FIX_SHIFT;
+    state.asteroids[1].y = 50L << GAME_FIX_SHIFT;
+    state.bullets[0].active = 1;
+    state.bullets[0].life = 4;
+    state.bullets[0].x = state.asteroids[1].x;
+    state.bullets[0].y = state.asteroids[1].y;
+    game_step(&state, &no_input);
+    CHECK(state.lives == 9);
+    CHECK(state.next_extra_life == 30000);
 }
 
-static void test_render(void) {
-    GameState state;
-    GameInput thrust = {0, 0, 1, 0, 0, 0};
+static long distance_squared(long ax, long ay, long bx, long by) {
+    const long dx = (ax - bx) >> GAME_FIX_SHIFT;
+    const long dy = (ay - by) >> GAME_FIX_SHIFT;
 
-    init_playing(&state, 320, 200);
+    return dx * dx + dy * dy;
+}
+
+static void test_hyperspace(void) {
+    GameState state;
+    GameInput hyper = {0, 0, 0, 0, 1, 0, 0, 0};
+    int index;
+    int frame;
+    long old_x;
+    long old_y;
+
+    init_playing(&state);
+    CHECK(state.ship.hyperspace_cooldown == 0);
+    state.ship.vx = 100000;
+    state.ship.vy = -50000;
+    state.ship.invulnerability = 0;
+    old_x = state.ship.x;
+    old_y = state.ship.y;
+
+    game_step(&state, &hyper);
+
+    /* jumped, stopped, invulnerable, recharging */
+    CHECK(state.ship.x != old_x || state.ship.y != old_y);
+    CHECK(state.ship.vx == 0 && state.ship.vy == 0);
+    CHECK(state.ship.invulnerability >= 99);
+    CHECK(state.ship.hyperspace_cooldown == GAME_HYPERSPACE_RECHARGE_FRAMES);
+
+    /* it lands clear of every rock: rock radius + 24 world pixels (allowing one frame of rock movement) */
+    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
+        const GameAsteroid *asteroid = &state.asteroids[index];
+        if (asteroid->active) {
+            const long radius = (asteroid->size == 3 ? 16 : asteroid->size == 2 ? 10 : 5) + 24 - 2;
+            CHECK(distance_squared(state.ship.x, state.ship.y, asteroid->x, asteroid->y) >= radius * radius);
+        }
+    }
+
+    /* no second jump until it has recharged */
+    {
+        const long jumped_x = state.ship.x;
+        const long jumped_y = state.ship.y;
+
+        for (frame = 0; frame < GAME_HYPERSPACE_RECHARGE_FRAMES - 5; ++frame) {
+            state.ship.invulnerability = 255;
+            game_step(&state, &hyper);
+            CHECK(state.ship.x == jumped_x && state.ship.y == jumped_y);
+        }
+        CHECK(state.ship.hyperspace_cooldown > 0);
+        for (frame = 0; frame < 10; ++frame) {
+            state.ship.invulnerability = 255;
+            game_step(&state, &no_input);
+        }
+        CHECK(state.ship.hyperspace_cooldown == 0);
+    }
+
+    /* a lost life recharges it */
+    state.ship.hyperspace_cooldown = 300;
+    clear_field(&state);
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    state.ship.invulnerability = 0;
+    game_step(&state, &no_input);
+    CHECK(state.ship.hyperspace_cooldown == 0);
+}
+
+static void test_pause(void) {
+    GameState state;
+    GameInput pause = {0, 0, 0, 0, 0, 0, 1, 0};
+    int32_t x_before;
+    uint16_t frame_before;
+    int frame;
+
+    init_playing(&state);
+    x_before = state.asteroids[0].x;
+
+    game_step(&state, &pause);
+    CHECK(state.paused);
+    /* holding pause does not toggle again */
+    game_step(&state, &pause);
+    CHECK(state.paused);
+
+    game_step(&state, &no_input);
+    frame_before = state.frame;
+    x_before = state.asteroids[0].x;
+    for (frame = 0; frame < 20; ++frame) {
+        game_step(&state, &no_input);
+    }
+    CHECK(state.asteroids[0].x == x_before);
+    CHECK(state.paused);
+    (void) frame_before;
+
+    render(&state);
+    CHECK(has_text("PAUSED"));
+
+    game_step(&state, &pause);
+    CHECK(!state.paused);
+    game_step(&state, &no_input);
+    CHECK(state.asteroids[0].x != x_before);
+}
+
+/* ---- tests: game over, high scores ---- */
+
+static void test_game_over_without_high_score(void) {
+    GameState state;
+    int frame;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.score = 500;
+    state.lives = 1;
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
     state.ship.invulnerability = 0;
 
-    line_count = 0;
-    lines_out_of_range = 0;
-    memset(color_counts, 0, sizeof(color_counts));
-    game_render(&state, NULL, count_line, NULL, NULL);
+    game_step(&state, &no_input);
+    CHECK(state.mode == GAME_MODE_GAME_OVER);
+    CHECK(state.lives == 0);
+
+    for (frame = 0; frame < 149; ++frame) {
+        game_step(&state, &no_input);
+        CHECK(state.mode == GAME_MODE_GAME_OVER);
+    }
+    game_step(&state, &no_input);   /* the game over screen lasts 150 frames */
+    CHECK(state.mode == GAME_MODE_TITLE);   /* 500 is below the 1000 needed for the table */
+    CHECK(!state.scores_changed);
+}
+
+static void test_game_over_skip_with_key(void) {
+    GameState state;
+    GameInput space = {0, 0, 0, 1, 0, 1, 0, 0};
+    int frame;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.score = 500;
+    state.lives = 1;
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    state.ship.invulnerability = 0;
+    game_step(&state, &no_input);
+    CHECK(state.mode == GAME_MODE_GAME_OVER);
+
+    /* too early to skip */
+    game_step(&state, &space);
+    CHECK(state.mode == GAME_MODE_GAME_OVER);
+    game_step(&state, &no_input);
+    for (frame = 0; frame < 40; ++frame) {
+        game_step(&state, &no_input);
+    }
+    game_step(&state, &space);
+    CHECK(state.mode == GAME_MODE_TITLE);
+}
+
+static void run_game_over_with_score(GameState *state, uint32_t score) {
+    GameHighScore table[GAME_HIGH_SCORE_COUNT];
+    int frame;
+
+    memcpy(table, state->high_scores, sizeof(table));   /* a new game keeps the high scores */
+    init_playing(state);
+    memcpy(state->high_scores, table, sizeof(table));
+    clear_field(state);
+    state->score = score;
+    state->lives = 1;
+    put_rock_on_ship(state, GAME_ASTEROID_LARGE);
+    state->ship.invulnerability = 0;
+    game_step(state, &no_input);
+    for (frame = 0; frame < 150 && state->mode == GAME_MODE_GAME_OVER; ++frame) {
+        game_step(state, &no_input);
+    }
+}
+
+static void test_initials_entry(void) {
+    GameState state;
+    GameInput right = {0, 1, 0, 0, 0, 0, 0, 0};
+    GameInput left = {1, 0, 0, 0, 0, 0, 0, 0};
+    GameInput fire = {0, 0, 0, 1, 0, 1, 0, 0};
+    int frame;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    run_game_over_with_score(&state, 1234);
+    CHECK(state.mode == GAME_MODE_ENTER_INITIALS);
+    CHECK(strcmp(state.entry, "AAA") == 0);
+    CHECK(state.entry_position == 0);
+
+    /* right: A -> B */
+    game_step(&state, &right);
+    CHECK(state.entry[0] == 'B');
+    game_step(&state, &no_input);
+
+    /* left twice: B -> A -> Z (wraps) */
+    game_step(&state, &left);
+    game_step(&state, &no_input);
+    game_step(&state, &left);
+    game_step(&state, &no_input);
+    CHECK(state.entry[0] == 'Z');
+
+    /* holding right repeats after a delay */
+    for (frame = 0; frame < 60; ++frame) {
+        game_step(&state, &right);
+    }
+    CHECK(state.entry[0] != 'Z');
+    game_step(&state, &no_input);
+
+    /* set the first letter to 'M', accept, then 'B' and 'C' */
+    state.entry[0] = 'M';
+    game_step(&state, &fire);
+    game_step(&state, &no_input);
+    CHECK(state.entry_position == 1);
+    CHECK(state.entry[1] == 'M');   /* the next letter starts at the same one */
+    state.entry[1] = 'B';
+    game_step(&state, &fire);
+    game_step(&state, &no_input);
+    CHECK(state.entry_position == 2);
+    state.entry[2] = 'C';
+    game_step(&state, &fire);
+    game_step(&state, &no_input);
+
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(state.high_scores[0].score == 1234);
+    CHECK(strcmp(state.high_scores[0].initials, "MBC") == 0);
+    CHECK(state.scores_changed);
+}
+
+static void test_high_score_ranking(void) {
+    GameState state;
+    int index;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        state.high_scores[index].score = (uint32_t) (5000 - index * 1000);
+        memcpy(state.high_scores[index].initials, "OLD", 4);
+    }
+
+    /* 3500 slots in at rank 3 (after 5000, 4000), pushing the lowest entry off */
+    run_game_over_with_score(&state, 3500);
+    CHECK(state.mode == GAME_MODE_ENTER_INITIALS);
+    memcpy(state.entry, "NEW", 4);
+    state.entry_position = 2;
+    {
+        const GameInput fire = {0, 0, 0, 1, 0, 1, 0, 0};
+        game_step(&state, &fire);
+    }
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(state.high_scores[0].score == 5000);
+    CHECK(state.high_scores[1].score == 4000);
+    CHECK(state.high_scores[2].score == 3500);
+    CHECK(strcmp(state.high_scores[2].initials, "NEW") == 0);
+    CHECK(state.high_scores[3].score == 3000);
+    CHECK(state.high_scores[4].score == 2000);
+
+    /* a score below the lowest entry does not qualify, however high */
+    run_game_over_with_score(&state, 1999);
+    CHECK(state.mode == GAME_MODE_TITLE);
+}
+
+static void test_score_file_round_trip(void) {
+    GameState state;
+    GameState loaded;
+    uint8_t data[GAME_SCORE_FILE_BYTES];
+    uint8_t bad[GAME_SCORE_FILE_BYTES];
+    int index;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        state.high_scores[index].score = 123456u * (uint32_t) (index + 1);
+        state.high_scores[index].initials[0] = (char) ('A' + index);
+        state.high_scores[index].initials[1] = 'Z';
+        state.high_scores[index].initials[2] = (index & 1) ? '-' : 'Q';
+    }
+    game_scores_pack(&state, data);
+    CHECK(data[0] == 'A' && data[1] == 'S' && data[2] == 'T' && data[3] == '1');
+    CHECK(GAME_SCORE_FILE_BYTES == 4 + GAME_HIGH_SCORE_COUNT * 8);
+
+    game_init(&loaded, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    CHECK(game_scores_unpack(&loaded, data));
+    for (index = 0; index < GAME_HIGH_SCORE_COUNT; ++index) {
+        CHECK(loaded.high_scores[index].score == state.high_scores[index].score);
+        CHECK(strcmp(loaded.high_scores[index].initials, state.high_scores[index].initials) == 0);
+    }
+
+    /* damaged files are rejected and leave the table alone */
+    memcpy(bad, data, sizeof(bad));
+    bad[0] = 'X';
+    game_init(&loaded, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    CHECK(!game_scores_unpack(&loaded, bad));
+    CHECK(loaded.high_scores[0].score == 0);
+    memcpy(bad, data, sizeof(bad));
+    bad[4] = '!';
+    CHECK(!game_scores_unpack(&loaded, bad));
+    CHECK(loaded.high_scores[0].score == 0);
+}
+
+/* ---- tests: rendering ---- */
+
+static void test_render_playing_geometry(void) {
+    GameState state;
+
+    init_playing(&state);
+    state.ship.invulnerability = 0;
+    render(&state);
 
     /* 4 ship edges, and 8-11 edges for each of the 6 large rocks */
     CHECK(color_counts[GAME_COLOR_SHIP] == 4);
     CHECK(color_counts[GAME_COLOR_ASTEROID_LARGE] >= 6 * 8 && color_counts[GAME_COLOR_ASTEROID_LARGE] <= 6 * 11);
     CHECK(color_counts[GAME_COLOR_FLAME] == 0);
-    CHECK(lines_out_of_range == 0);
+    CHECK(rect_count >= 7);
 
-    game_step(&state, &thrust);
-    memset(color_counts, 0, sizeof(color_counts));
-    game_render(&state, NULL, count_line, NULL, NULL);
-    CHECK(color_counts[GAME_COLOR_FLAME] == 2);
-
-    /* medium resolution doubles the horizontal scale */
-    game_set_resolution(&state, 640, 200);
-    CHECK(state.x_scale == 512);
-    CHECK(state.y_scale == 213);
+    {
+        GameInput thrust = {0, 0, 1, 0, 0, 0, 0, 0};
+        game_step(&state, &thrust);
+        render(&state);
+        CHECK(color_counts[GAME_COLOR_FLAME] == 2);
+    }
 }
 
 static int ship_min_x;
@@ -441,34 +862,31 @@ static int ship_max_x;
 static int ship_min_y;
 static int ship_max_y;
 
-static void capture_ship(void *context, int x0, int y0, int x1, int y1, uint8_t color) {
-    (void) context;
-    if (color != GAME_COLOR_SHIP) {
-        return;
-    }
-    if (x0 < ship_min_x) ship_min_x = x0;
-    if (x1 < ship_min_x) ship_min_x = x1;
-    if (x0 > ship_max_x) ship_max_x = x0;
-    if (x1 > ship_max_x) ship_max_x = x1;
-    if (y0 < ship_min_y) ship_min_y = y0;
-    if (y1 < ship_min_y) ship_min_y = y1;
-    if (y0 > ship_max_y) ship_max_y = y0;
-    if (y1 > ship_max_y) ship_max_y = y1;
-}
-
 static void measure_ship(GameState *state) {
-    ship_min_x = 10000;
-    ship_max_x = -10000;
-    ship_min_y = 10000;
-    ship_max_y = -10000;
-    game_render(state, NULL, capture_ship, NULL, NULL);
+    int index;
+
+    render(state);
+    ship_min_x = ship_min_y = 10000;
+    ship_max_x = ship_max_y = -10000;
+    /* the ship's four edges come first in the capture */
+    for (index = 0; index < 4 && index < line_count; ++index) {
+        if (lines[index][0] < ship_min_x) ship_min_x = lines[index][0];
+        if (lines[index][2] < ship_min_x) ship_min_x = lines[index][2];
+        if (lines[index][0] > ship_max_x) ship_max_x = lines[index][0];
+        if (lines[index][2] > ship_max_x) ship_max_x = lines[index][2];
+        if (lines[index][1] < ship_min_y) ship_min_y = lines[index][1];
+        if (lines[index][3] < ship_min_y) ship_min_y = lines[index][3];
+        if (lines[index][1] > ship_max_y) ship_max_y = lines[index][1];
+        if (lines[index][3] > ship_max_y) ship_max_y = lines[index][3];
+    }
 }
 
 static void test_ship_is_long_and_narrow(void) {
     GameState state;
 
-    /* 320x240 has square pixels, so screen extents equal world extents */
-    init_playing(&state, 320, 240);
+    /* a 320x240 field has square pixels, so screen extents equal world extents */
+    game_init(&state, 0, 0, 320, 240);
+    game_start(&state);
     memset(state.asteroids, 0, sizeof(state.asteroids));
     state.ship.invulnerability = 0;
 
@@ -482,92 +900,66 @@ static void test_ship_is_long_and_narrow(void) {
     CHECK(ship_max_x - ship_min_x >= 15 && ship_max_x - ship_min_x <= 17);
     CHECK(ship_max_y - ship_min_y >= 7 && ship_max_y - ship_min_y <= 9);
 
-    /* real 320x200 screen: 5/6 vertical scale keeps the 4:3 proportions */
-    game_set_resolution(&state, 320, 200);
+    /* the real field is 288x176: the ship keeps its proportions on the 4:3 screen (x 0.9, y 0.73) */
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    game_start(&state);
+    memset(state.asteroids, 0, sizeof(state.asteroids));
+    state.ship.invulnerability = 0;
     state.ship.angle = 49152u;
     measure_ship(&state);
-    CHECK(ship_max_y - ship_min_y >= 12 && ship_max_y - ship_min_y <= 15);
-}
-
-#define MAX_TRACKED_LINES 400
-#define MAX_TRACKED_RECTS 80
-
-static int tracked_lines[MAX_TRACKED_LINES][4];
-static int tracked_line_count;
-static int tracked_rects[MAX_TRACKED_RECTS][4];
-static int tracked_rect_count;
-
-static void track_line(void *context, int x0, int y0, int x1, int y1, uint8_t color) {
-    (void) context;
-    (void) color;
-    if (tracked_line_count < MAX_TRACKED_LINES) {
-        tracked_lines[tracked_line_count][0] = x0;
-        tracked_lines[tracked_line_count][1] = y0;
-        tracked_lines[tracked_line_count][2] = x1;
-        tracked_lines[tracked_line_count][3] = y1;
-        ++tracked_line_count;
-    }
-}
-
-static void track_rect(void *context, int x0, int y0, int x1, int y1) {
-    (void) context;
-    if (tracked_rect_count < MAX_TRACKED_RECTS) {
-        tracked_rects[tracked_rect_count][0] = x0;
-        tracked_rects[tracked_rect_count][1] = y0;
-        tracked_rects[tracked_rect_count][2] = x1;
-        tracked_rects[tracked_rect_count][3] = y1;
-        ++tracked_rect_count;
-    }
+    CHECK(ship_max_y - ship_min_y >= 10 && ship_max_y - ship_min_y <= 13);
+    CHECK(ship_max_x - ship_min_x >= 6 && ship_max_x - ship_min_x <= 8);
+    /* centred in the field */
+    CHECK(ship_min_x > FIELD_X + FIELD_W / 2 - 10 && ship_max_x < FIELD_X + FIELD_W / 2 + 10);
+    CHECK(ship_min_y > FIELD_Y + FIELD_H / 2 - 14 && ship_max_y < FIELD_Y + FIELD_H / 2 + 14);
 }
 
 static int point_is_covered(int x, int y) {
     int index;
 
-    for (index = 0; index < tracked_rect_count; ++index) {
-        if (x >= tracked_rects[index][0] && x <= tracked_rects[index][2] &&
-            y >= tracked_rects[index][1] && y <= tracked_rects[index][3]) {
+    for (index = 0; index < rect_count && index < MAX_RECTS; ++index) {
+        if (x >= rects[index][0] && x <= rects[index][2] && y >= rects[index][1] && y <= rects[index][3]) {
             return 1;
         }
     }
     return 0;
 }
 
-/* Everything drawn must sit inside a rectangle reported as dirty, or erasing would leave ghosts. */
+/* Everything drawn on the field must sit inside a rectangle reported as dirty, or erasing would leave ghosts. */
 static void check_dirty_coverage(GameState *state) {
     int index;
 
-    tracked_line_count = 0;
-    tracked_rect_count = 0;
-    game_render(state, NULL, track_line, NULL, track_rect);
-    CHECK(tracked_line_count > 0);
-    for (index = 0; index < tracked_line_count; ++index) {
-        CHECK(point_is_covered(tracked_lines[index][0], tracked_lines[index][1]));
-        CHECK(point_is_covered(tracked_lines[index][2], tracked_lines[index][3]));
+    render(state);
+    CHECK(line_count > 0 && line_count <= MAX_LINES);
+    CHECK(rect_count <= MAX_RECTS);
+    for (index = 0; index < line_count && index < MAX_LINES; ++index) {
+        CHECK(point_is_covered(lines[index][0], lines[index][1]));
+        CHECK(point_is_covered(lines[index][2], lines[index][3]));
     }
 }
 
 static void test_dirty_rects_cover_everything_drawn(void) {
-    static const uint16_t widths[2] = {320, 640};
-    int variant;
+    GameState state;
+    int frame;
 
-    for (variant = 0; variant < 2; ++variant) {
-        GameState state;
-        int frame;
-
-        init_playing(&state, widths[variant], 200);
-        for (frame = 0; frame < 600; ++frame) {
-            GameInput input = {0, 0, 0, 0, 0, 0};
-            input.thrust = (uint8_t) ((frame / 40) & 1);
-            input.left = (uint8_t) ((frame / 25) & 1);
-            input.fire = (uint8_t) ((frame / 7) & 1);
-            if (frame % 100 == 99) {
-                state.wave = 6;   /* bigger fields */
-                memset(state.asteroids, 0, sizeof(state.asteroids));
-            }
-            game_step(&state, &input);
-            if (frame % 3 == 0) {
-                check_dirty_coverage(&state);
-            }
+    init_playing(&state);
+    for (frame = 0; frame < 700; ++frame) {
+        GameInput input = {0, 0, 0, 0, 0, 0, 0, 0};
+        input.thrust = (uint8_t) ((frame / 40) & 1);
+        input.left = (uint8_t) ((frame / 25) & 1);
+        input.fire = (uint8_t) ((frame / 7) & 1);
+        input.hyperspace = (uint8_t) (frame % 173 == 0);
+        if (frame % 100 == 99) {
+            state.wave = 6;   /* bigger fields */
+            memset(state.asteroids, 0, sizeof(state.asteroids));
+        }
+        if (state.mode != GAME_MODE_PLAYING) {
+            game_start(&state);
+        }
+        state.ship.invulnerability = (uint8_t) (frame % 3 == 0 ? 255 : state.ship.invulnerability);
+        game_step(&state, &input);
+        if (frame % 3 == 0) {
+            check_dirty_coverage(&state);
         }
     }
 }
@@ -578,10 +970,8 @@ static void test_render_cache_is_reused(void) {
     int8_t first_x[GAME_MAX_ASTEROID_POINTS];
     int frame;
 
-    init_playing(&state, 320, 200);
-    memset(state.asteroids, 0, sizeof(state.asteroids));
-    game_step(&state, &no_input);
-    state.wave = 1;
+    game_init(&state, 0, 0, 320, 240);
+    game_start(&state);
     memset(state.asteroids, 0, sizeof(state.asteroids));
     state.asteroids[0].active = 1;
     state.asteroids[0].size = GAME_ASTEROID_LARGE;
@@ -594,7 +984,7 @@ static void test_render_cache_is_reused(void) {
     state.asteroids[0].angle = 0;
     asteroid = &state.asteroids[0];
 
-    game_render(&state, NULL, count_line, NULL, NULL);
+    render(&state);
     CHECK(asteroid->cache_valid);
     /* vertex 0 points right, at radius 16 */
     CHECK(asteroid->off_x[0] == 16 && asteroid->off_y[0] == 0);
@@ -602,24 +992,220 @@ static void test_render_cache_is_reused(void) {
 
     /* a small turn stays in the same 64-step orientation and reuses the cache */
     state.asteroids[0].angle = 500;
-    game_render(&state, NULL, count_line, NULL, NULL);
+    render(&state);
     CHECK(memcmp(first_x, asteroid->off_x, sizeof(first_x)) == 0);
 
     /* a bigger turn (>5.6 degrees) rebuilds it */
     state.asteroids[0].angle = 3000;
-    game_render(&state, NULL, count_line, NULL, NULL);
+    render(&state);
     CHECK(asteroid->cache_index == 2);
     CHECK(memcmp(first_x, asteroid->off_x, sizeof(first_x)) != 0);
+}
 
-    /* changing resolution invalidates the cached (screen-space) offsets */
-    game_set_resolution(&state, 640, 200);
-    CHECK(!asteroid->cache_valid);
-    game_render(&state, NULL, count_line, NULL, NULL);
-    CHECK(asteroid->off_x[0] == 0 || asteroid->off_x[0] > 16);
+static void test_text_layout_is_aligned(void) {
+    GameState state;
+    int index;
+    int mode;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    for (mode = 0; mode < 4; ++mode) {
+        state.mode = (uint8_t) mode;
+        state.paused = 0;
+        state.banner_timer = 10;
+        state.score = 1234;
+        state.entry[0] = 'A';
+        state.entry[1] = 'B';
+        state.entry[2] = 'C';
+        state.entry[3] = 0;
+        state.screen_refresh = 2;
+        state.hud_refresh = 2;
+        render(&state);
+        CHECK(text_count > 0 && text_count <= MAX_TEXTS);
+        for (index = 0; index < text_count && index < MAX_TEXTS; ++index) {
+            const int cell = (texts[index].scale == 2) ? 16 : 8;
+            const int width = (int) strlen(texts[index].text) * cell;
+
+            CHECK(texts[index].scale == 1 || texts[index].scale == 2);
+            CHECK(texts[index].x % cell == 0);
+            CHECK(texts[index].x >= 0 && texts[index].x + width <= 320);
+            CHECK(texts[index].y >= 0 && texts[index].y + cell <= 200);
+        }
+    }
+}
+
+static void test_hud_content_and_redraw(void) {
+    GameState state;
+    int frame;
+    int text_before;
+
+    init_playing(&state);
+    state.score = 1234;
+    state.lives = 2;
+    state.wave = 7;
+    render(&state);
+
+    CHECK(has_text("SCORE 001234"));
+    CHECK(has_text("WAVE 07"));
+    CHECK(has_text("HI 001234"));   /* the running score is the hi score until beaten */
+    CHECK(has_text("HYPER READY "));
+    {
+        const TextCall *score = find_text("SCORE 001234");
+        CHECK(score != NULL && score->y == 0 && score->bg == GAME_COLOR_FRAME);
+    }
+    {
+        /* two ship icons (code 127) then blanks */
+        char icons[10];
+        memset(icons, ' ', 8);
+        icons[0] = 127;
+        icons[1] = 127;
+        icons[8] = 0;
+        CHECK(has_text(icons));
+    }
+
+    /* unchanged values are drawn only for the two frames it takes to fill both screen buffers */
+    render(&state);
+    CHECK(has_text("SCORE 001234"));
+    render(&state);
+    CHECK(!has_text("SCORE 001234"));
+    text_before = text_count;
+    for (frame = 0; frame < 5; ++frame) {
+        render(&state);
+        CHECK(text_count <= 2);   /* only the wave banner, if any */
+    }
+    (void) text_before;
+
+    /* a change redraws it */
+    state.score = 1300;
+    render(&state);
+    CHECK(has_text("SCORE 001300"));
+
+    /* many lives are shown as an icon and a count */
+    state.lives = 8;
+    render(&state);
+    {
+        char icons[10];
+        memset(icons, ' ', 8);
+        icons[0] = 127;
+        icons[1] = 'X';
+        icons[2] = '8';
+        icons[8] = 0;
+        CHECK(has_text(icons));
+    }
+
+    /* the hyperspace charge is shown as a percentage while recharging */
+    state.ship.hyperspace_cooldown = 250;
+    render(&state);
+    CHECK(has_text("HYPER 50%  "));
+}
+
+static void test_static_screens_draw_once_per_buffer(void) {
+    GameState state;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+
+    render(&state);
+    CHECK(clear_calls == 1);
+    CHECK(has_text("ASTEROIDS"));
+    CHECK(find_text("ASTEROIDS")->scale == 2);
+    CHECK(has_text("PRESS FIRE TO START"));
+    CHECK(has_text("- HALL OF FAME -"));
+    CHECK(has_text("1. ---  000000"));
+    render(&state);
+    CHECK(clear_calls == 1);
+    CHECK(has_text("ASTEROIDS"));
+
+    /* both buffers are done: nothing more is drawn until something changes */
+    render(&state);
+    CHECK(clear_calls == 0);
+    CHECK(!has_text("ASTEROIDS"));
+    CHECK(!has_text("PRESS FIRE TO START"));
+    CHECK(line_count == 0);
+}
+
+static void test_title_prompt_blinks(void) {
+    GameState state;
+    int frame;
+    int toggles = 0;
+    uint8_t last;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    render(&state);
+    render(&state);
+    last = state.prompt_visible;
+    CHECK(last == 1);
+
+    for (frame = 0; frame < 100; ++frame) {
+        game_step(&state, &no_input);
+        if (state.prompt_visible != last) {
+            const TextCall *prompt;
+
+            ++toggles;
+            last = state.prompt_visible;
+            /* the new state is drawn on two consecutive frames (one per screen buffer) */
+            render(&state);
+            prompt = find_text("PRESS FIRE TO START");
+            CHECK(prompt != NULL);
+            if (prompt != NULL) {
+                CHECK(prompt->fg == (last ? GAME_COLOR_YELLOW : GAME_COLOR_BLACK));
+            }
+            render(&state);
+            CHECK(has_text("PRESS FIRE TO START"));
+            render(&state);
+            CHECK(!has_text("PRESS FIRE TO START"));
+        }
+    }
+    CHECK(toggles == 4);   /* every 25 frames */
+}
+
+static void test_game_over_and_initials_screens(void) {
+    GameState state;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    run_game_over_with_score(&state, 4321);
+    CHECK(state.mode == GAME_MODE_ENTER_INITIALS);
+    render(&state);
+    CHECK(clear_calls == 1);
+    CHECK(has_text("NEW HIGH SCORE!"));
+    CHECK(has_text("SCORE 004321"));
+    CHECK(has_text("ENTER YOUR INITIALS"));
+    CHECK(has_text("A"));
+
+    /* the game over screen itself */
+    init_playing(&state);
+    clear_field(&state);
+    state.score = 4321;
+    state.lives = 1;
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    state.ship.invulnerability = 0;
+    game_step(&state, &no_input);
+    CHECK(state.mode == GAME_MODE_GAME_OVER);
+    render(&state);
+    CHECK(has_text("GAME OVER"));
+    CHECK(find_text("GAME OVER")->scale == 2);
+    CHECK(has_text("YOUR SCORE 004321"));
+    CHECK(has_text("NEW HIGH SCORE!"));
+}
+
+static void test_banner_and_playing_screen(void) {
+    GameState state;
+
+    init_playing(&state);
+    render(&state);
+    CHECK(clear_calls == 1);   /* first frame of the game clears the title screen away */
+    CHECK(has_text("WAVE 01"));
+    /* the banner is over the moving game, so its rectangle is reported for erasing */
+    CHECK(rect_count > 0);
+
+    state.banner_timer = 0;
+    render(&state);
+    render(&state);
+    CHECK(!has_text("WAVE 01") || find_text("WAVE 01")->y == 0);
 }
 
 int main(void) {
-    test_initial_wave();
+    test_initial_state();
+    test_start_from_title();
+    test_no_autopilot();
     test_wave_sizes();
     test_asteroid_shapes();
     test_bullet_breaks_asteroids_and_scores();
@@ -627,15 +1213,27 @@ int main(void) {
     test_turning_speed();
     test_thrust_and_drag();
     test_bullets();
-    test_first_key_starts_a_game_and_keeps_control();
-    test_game_over_returns_to_the_demo();
     test_ship_collision();
     test_wave_clear_advances();
     test_asteroid_speeds_scale_with_wave();
-    test_render();
+    test_extra_lives();
+    test_hyperspace();
+    test_pause();
+    test_game_over_without_high_score();
+    test_game_over_skip_with_key();
+    test_initials_entry();
+    test_high_score_ranking();
+    test_score_file_round_trip();
+    test_render_playing_geometry();
     test_ship_is_long_and_narrow();
     test_dirty_rects_cover_everything_drawn();
     test_render_cache_is_reused();
+    test_text_layout_is_aligned();
+    test_hud_content_and_redraw();
+    test_static_screens_draw_once_per_buffer();
+    test_title_prompt_blinks();
+    test_game_over_and_initials_screens();
+    test_banner_and_playing_screen();
 
     printf("%d checks, %d failures\n", checks, failures);
 #ifdef ATARI_ST_TARGET
