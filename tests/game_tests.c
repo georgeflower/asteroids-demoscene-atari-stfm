@@ -1202,6 +1202,313 @@ static void test_banner_and_playing_screen(void) {
     CHECK(!has_text("WAVE 01") || find_text("WAVE 01")->y == 0);
 }
 
+/* ---- tests: sound ---- */
+
+#define MAX_PSG_WRITES 400
+
+static struct PsgWrite {
+    int tick;
+    int reg;
+    int value;
+} psg_writes[MAX_PSG_WRITES];
+static int psg_count;
+static int psg_tick;
+static int psg_state[16];   /* current value of each register as the chip would hold it */
+static int mixer_always_has_ports;
+
+static void psg_capture(uint8_t reg, uint8_t value) {
+    if (psg_count < MAX_PSG_WRITES) {
+        psg_writes[psg_count].tick = psg_tick;
+        psg_writes[psg_count].reg = reg;
+        psg_writes[psg_count].value = value;
+    }
+    ++psg_count;
+    psg_state[reg & 15] = value;
+    if (reg == 7 && (value & 0xc0) != 0xc0) {
+        mixer_always_has_ports = 0;   /* bits 6 and 7 must stay set on the ST */
+    }
+}
+
+static void psg_start(void) {
+    psg_count = 0;
+    psg_tick = 0;
+    mixer_always_has_ports = 1;
+    memset(psg_state, 0, sizeof(psg_state));
+    sound_init(psg_capture);
+}
+
+static void psg_ticks(int count) {
+    int index;
+
+    for (index = 0; index < count; ++index) {
+        sound_tick();
+        ++psg_tick;
+    }
+}
+
+static void test_sound_engine(void) {
+    int tick;
+
+    /* init leaves the chip silent with the port bits set */
+    psg_start();
+    CHECK(psg_state[8] == 0 && psg_state[9] == 0 && psg_state[10] == 0);
+    CHECK(psg_state[7] == 0xff);
+
+    /* nothing playing: ticks write nothing new */
+    {
+        const int before = psg_count;
+        psg_ticks(5);
+        CHECK(psg_count - before <= 1);   /* at most the mixer settling */
+        CHECK((psg_state[7] & 0x3f) == 0x3f);
+    }
+
+    /* shot: voice A tone sweeping down in pitch (period rises 8 per frame), volume 12 falling to 0 */
+    psg_start();
+    sound_play(SFX_SHOOT);
+    psg_ticks(1);
+    CHECK(psg_state[0] == 70 && psg_state[1] == 0);
+    CHECK(psg_state[8] == 12);
+    CHECK((psg_state[7] & 0x01) == 0);   /* tone A on */
+    CHECK((psg_state[7] & 0x08) != 0);   /* noise A off */
+    psg_ticks(5);
+    CHECK(psg_state[0] == 70 + 8 * 5);
+    CHECK(psg_state[8] == 12 - 5);
+    psg_ticks(20);
+    CHECK(psg_state[8] == 0);
+    CHECK((psg_state[7] & 0x3f) == 0x3f);   /* everything switched off again */
+
+    /* explosions: noise on voice B, no tone; a bigger one is deeper and longer */
+    psg_start();
+    sound_play(SFX_EXPLODE_LARGE);
+    psg_ticks(1);
+    CHECK(psg_state[9] == 15);
+    CHECK(psg_state[6] == 28);
+    CHECK((psg_state[7] & 0x02) != 0);   /* tone B off */
+    CHECK((psg_state[7] & 0x10) == 0);   /* noise B on */
+    psg_ticks(40);
+    CHECK(psg_state[9] == 0);
+    psg_start();
+    sound_play(SFX_EXPLODE_SMALL);
+    psg_ticks(1);
+    CHECK(psg_state[6] == 12);
+    psg_ticks(20);
+    CHECK(psg_state[9] == 0);
+
+    /* an arpeggio steps through its notes */
+    psg_start();
+    sound_play(SFX_POWERUP);
+    psg_ticks(1);
+    CHECK(psg_state[0] == 239);
+    psg_ticks(3);
+    CHECK(psg_state[0] == 190);
+    psg_ticks(3);
+    CHECK(psg_state[0] == 159);
+    psg_ticks(3);
+    CHECK(psg_state[0] == 119);
+    psg_ticks(4);
+    CHECK(psg_state[8] == 0);
+
+    /* ship death plays a tone and noise together */
+    psg_start();
+    sound_play(SFX_SHIP_DEATH);
+    psg_ticks(1);
+    CHECK(psg_state[8] > 0 && psg_state[9] > 0);
+
+    /* a new effect replaces one already playing on the same voice */
+    psg_start();
+    sound_play(SFX_SHOOT);
+    psg_ticks(4);
+    sound_play(SFX_HYPERSPACE);
+    psg_ticks(1);
+    CHECK(psg_state[0] == (400 & 0xff) && psg_state[1] == (400 >> 8));
+
+    /* looping sounds: thrust rumble on voice C, UFO warble when there is no thrust */
+    psg_start();
+    sound_set_thrust(1);
+    psg_ticks(3);
+    CHECK(psg_state[10] == 6);
+    CHECK((psg_state[7] & 0x20) == 0);   /* noise C on */
+    CHECK(psg_state[6] == 26);
+    sound_set_thrust(0);
+    psg_ticks(1);
+    CHECK(psg_state[10] == 0);
+
+    psg_start();
+    sound_set_ufo(1);
+    psg_ticks(1);
+    CHECK((psg_state[7] & 0x04) == 0);   /* tone C on */
+    {
+        const int first = psg_state[4];
+        int changed = 0;
+        for (tick = 0; tick < 12; ++tick) {
+            psg_ticks(1);
+            if (psg_state[4] != first) {
+                changed = 1;
+            }
+        }
+        CHECK(changed);   /* it warbles */
+    }
+    sound_set_thrust(1);
+    psg_ticks(1);
+    CHECK((psg_state[7] & 0x04) != 0);   /* thrust takes over voice C */
+    sound_set_thrust(0);
+    sound_set_ufo(0);
+    psg_ticks(1);
+    CHECK(psg_state[10] == 0);
+
+    /* silence stops everything, and the port bits are never touched */
+    psg_start();
+    sound_play(SFX_GAME_OVER);
+    sound_set_thrust(1);
+    psg_ticks(3);
+    sound_silence();
+    CHECK(psg_state[8] == 0 && psg_state[9] == 0 && psg_state[10] == 0);
+    CHECK(psg_state[7] == 0xff);
+    psg_ticks(5);
+    CHECK(psg_state[8] == 0 && psg_state[10] == 0);
+    CHECK(mixer_always_has_ports);
+
+    /* unknown ids are ignored */
+    sound_play(-3);
+    sound_play(SFX_COUNT + 4);
+    psg_ticks(2);
+    CHECK(mixer_always_has_ports);
+
+    sound_init(NULL);   /* the tests must not leave a callback behind */
+}
+
+static int events_contain(uint16_t events, int sfx) {
+    return (events & (1u << sfx)) != 0;
+}
+
+static void test_game_sound_events(void) {
+    GameState state;
+    GameInput fire = {0, 0, 0, 1, 0, 0, 0, 0};
+    GameInput hyper = {0, 0, 0, 0, 1, 0, 0, 0};
+    uint16_t events;
+    int size;
+
+    /* starting a game announces the wave */
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    game_start(&state);
+    events = game_take_sound_events(&state);
+    CHECK(events_contain(events, SFX_WAVE_START));
+    CHECK(game_take_sound_events(&state) == 0);   /* taking clears them */
+
+    /* firing */
+    init_playing(&state);
+    clear_field(&state);
+    (void) game_take_sound_events(&state);
+    state.ship.invulnerability = 255;
+    game_step(&state, &fire);
+    events = game_take_sound_events(&state);
+    CHECK(events_contain(events, SFX_SHOOT));
+
+    /* each rock size has its own explosion */
+    for (size = GAME_ASTEROID_LARGE; size >= GAME_ASTEROID_SMALL; --size) {
+        const int expected = (size == 3) ? SFX_EXPLODE_LARGE : (size == 2) ? SFX_EXPLODE_MEDIUM : SFX_EXPLODE_SMALL;
+
+        clear_field(&state);
+        state.asteroids[1].active = 1;
+        state.asteroids[1].size = (uint8_t) size;
+        state.asteroids[1].point_count = 8;
+        state.asteroids[1].x = 100L << GAME_FIX_SHIFT;
+        state.asteroids[1].y = 50L << GAME_FIX_SHIFT;
+        state.bullets[0].active = 1;
+        state.bullets[0].life = 4;
+        state.bullets[0].x = state.asteroids[1].x;
+        state.bullets[0].y = state.asteroids[1].y;
+        (void) game_take_sound_events(&state);
+        game_step(&state, &no_input);
+        events = game_take_sound_events(&state);
+        CHECK(events_contain(events, expected));
+        CHECK(!events_contain(events, SFX_SHIP_DEATH));
+    }
+
+    /* hyperspace */
+    init_playing(&state);
+    (void) game_take_sound_events(&state);
+    game_step(&state, &hyper);
+    CHECK(events_contain(game_take_sound_events(&state), SFX_HYPERSPACE));
+
+    /* extra life */
+    init_playing(&state);
+    clear_field(&state);
+    state.score = 9990;
+    state.asteroids[1].active = 1;
+    state.asteroids[1].size = GAME_ASTEROID_LARGE;
+    state.asteroids[1].point_count = 8;
+    state.asteroids[1].x = 100L << GAME_FIX_SHIFT;
+    state.asteroids[1].y = 50L << GAME_FIX_SHIFT;
+    state.bullets[0].active = 1;
+    state.bullets[0].life = 4;
+    state.bullets[0].x = state.asteroids[1].x;
+    state.bullets[0].y = state.asteroids[1].y;
+    (void) game_take_sound_events(&state);
+    game_step(&state, &no_input);
+    CHECK(events_contain(game_take_sound_events(&state), SFX_EXTRA_LIFE));
+
+    /* losing a life, then the last life */
+    init_playing(&state);
+    clear_field(&state);
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    state.ship.invulnerability = 0;
+    (void) game_take_sound_events(&state);
+    game_step(&state, &no_input);
+    events = game_take_sound_events(&state);
+    CHECK(events_contain(events, SFX_SHIP_DEATH));
+    CHECK(!events_contain(events, SFX_GAME_OVER));
+
+    clear_field(&state);
+    state.lives = 1;
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    state.ship.invulnerability = 0;
+    game_step(&state, &no_input);
+    events = game_take_sound_events(&state);
+    CHECK(events_contain(events, SFX_SHIP_DEATH));
+    CHECK(events_contain(events, SFX_GAME_OVER));
+}
+
+/* Every effect the game triggers must be a real effect id, and the chip's port bits must survive. */
+static void test_sound_ids_are_valid(void) {
+    GameState state;
+    int frame;
+    uint16_t seen = 0;
+
+    init_playing(&state);
+    psg_start();
+    for (frame = 0; frame < 3000; ++frame) {
+        GameInput input = {0, 0, 0, 0, 0, 0, 0, 0};
+        input.thrust = (uint8_t) ((frame / 30) & 1);
+        input.left = (uint8_t) ((frame / 17) & 1);
+        input.fire = (uint8_t) ((frame / 5) & 1);
+        input.hyperspace = (uint8_t) (frame % 211 == 0);
+        if (state.mode != GAME_MODE_PLAYING) {
+            game_start(&state);
+        }
+        game_step(&state, &input);
+        {
+            const uint16_t events = game_take_sound_events(&state);
+            int sfx;
+
+            seen = (uint16_t) (seen | events);
+            for (sfx = 1; sfx < SFX_COUNT; ++sfx) {
+                if (events & (1u << sfx)) {
+                    sound_play(sfx);
+                }
+            }
+            CHECK((events & 1u) == 0);   /* bit 0 (SFX_NONE) is never used */
+            CHECK((events >> SFX_COUNT) == 0);
+        }
+        sound_set_thrust(state.ship.thrusting);
+        sound_tick();
+    }
+    CHECK(events_contain(seen, SFX_SHOOT));
+    CHECK(events_contain(seen, SFX_EXPLODE_LARGE));
+    CHECK(mixer_always_has_ports);
+    sound_init(NULL);
+}
+
 int main(void) {
     test_initial_state();
     test_start_from_title();
@@ -1234,6 +1541,9 @@ int main(void) {
     test_title_prompt_blinks();
     test_game_over_and_initials_screens();
     test_banner_and_playing_screen();
+    test_sound_engine();
+    test_game_sound_events();
+    test_sound_ids_are_valid();
 
     printf("%d checks, %d failures\n", checks, failures);
 #ifdef ATARI_ST_TARGET

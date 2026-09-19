@@ -29,6 +29,9 @@ void platform_end_frame(void);
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1);
 int platform_take_elapsed_frames(void);
 
+/* Write one YM2149 register (for the sound engine). */
+void platform_sound_write(uint8_t reg, uint8_t value);
+
 /* High score file (ASTROIDS.SCO in the current directory). Load returns the bytes read, 0 if none. */
 int platform_load_scores(uint8_t *data, int size);
 void platform_save_scores(const uint8_t *data, int size);

@@ -132,6 +132,17 @@ static int within_radius(int32_t ax, int32_t ay, int32_t bx, int32_t by, int rad
     return (mul16(dx, dx) + mul16(dy, dy)) < mul16(r, r);
 }
 
+static void emit(GameState *state, int sfx) {
+    state->sound_events |= (uint16_t) (1u << sfx);
+}
+
+uint16_t game_take_sound_events(GameState *state) {
+    const uint16_t events = state->sound_events;
+
+    state->sound_events = 0;
+    return events;
+}
+
 static int pressed(uint8_t now, uint8_t before) {
     return now != 0 && before == 0;
 }
@@ -223,6 +234,7 @@ static void spawn_wave(GameState *state) {
         }
     }
     state->banner_timer = BANNER_FRAMES;
+    emit(state, SFX_WAVE_START);
 }
 
 static void split_asteroid(GameState *state, const GameAsteroid *asteroid) {
@@ -240,6 +252,7 @@ static void add_score(GameState *state, uint32_t points) {
     while (state->score >= state->next_extra_life) {
         if (state->lives < MAX_LIVES) {
             ++state->lives;
+            emit(state, SFX_EXTRA_LIFE);
         }
         state->next_extra_life += GAME_EXTRA_LIFE_INTERVAL;
     }
@@ -279,6 +292,7 @@ static void hyperspace(GameState *state) {
     ship->vy = 0;
     ship->hyperspace_cooldown = GAME_HYPERSPACE_RECHARGE_FRAMES;
     ship->invulnerability = SHIP_INVULNERABILITY_FRAMES;
+    emit(state, SFX_HYPERSPACE);
 }
 
 static void fire_bullet(GameState *state) {
@@ -293,6 +307,7 @@ static void fire_bullet(GameState *state) {
             bullet->vx = state->ship.vx + trig_mul(BULLET_SPEED, trig_cos(state->ship.angle));
             bullet->vy = state->ship.vy + trig_mul(BULLET_SPEED, trig_sin(state->ship.angle));
             state->ship.cooldown = SHIP_COOLDOWN_FRAMES;
+            emit(state, SFX_SHOOT);
             return;
         }
     }
@@ -438,6 +453,8 @@ static void resolve_bullet_collisions(GameState *state) {
                 bullet->active = 0;
                 asteroid->active = 0;
                 add_score(state, asteroid_points_table[exploded.size]);
+                emit(state, exploded.size == GAME_ASTEROID_LARGE ? SFX_EXPLODE_LARGE :
+                            exploded.size == GAME_ASTEROID_MEDIUM ? SFX_EXPLODE_MEDIUM : SFX_EXPLODE_SMALL);
                 split_asteroid(state, &exploded);
                 break;
             }
@@ -450,8 +467,10 @@ static void lose_life(GameState *state) {
         --state->lives;
     }
     reset_ship(state);
+    emit(state, SFX_SHIP_DEATH);
     if (state->lives == 0) {
         enter_mode(state, GAME_MODE_GAME_OVER);
+        emit(state, SFX_GAME_OVER);
     }
 }
 
@@ -697,6 +716,7 @@ static void step_enter_initials(GameState *state, const GameInput *input, const 
 
     if (pressed(input->start, previous->start) || pressed(input->fire, previous->fire)) {
         ++state->entry_position;
+        emit(state, SFX_MENU);
         if (state->entry_position < INITIALS_LENGTH) {
             /* the next letter starts where this one ended, which is quicker for repeated letters */
             state->entry[state->entry_position] = state->entry[state->entry_position - 1];

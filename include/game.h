@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "sound.h"
+
 /*
  * The game world is a virtual 320x240 square-pixel playfield (the Lovable
  * 800x600 canvas scaled by 0.4).  game_render() maps it onto the playing field
@@ -143,6 +145,7 @@ typedef struct GameState {
     uint8_t entry_position;
     uint8_t repeat_timer;
     uint8_t scores_changed;     /* set when the high score table changed and should be saved */
+    uint16_t sound_events;      /* bit per SFX_* id: effects to play (taken by game_take_sound_events) */
     GameInput previous;         /* last step's input, for detecting key presses */
 
     /* what is currently drawn on the (double-buffered) screen, so it is only redrawn on change */
@@ -187,6 +190,9 @@ void game_init(GameState *state, uint16_t field_x, uint16_t field_y, uint16_t fi
 void game_start(GameState *state);   /* begin a new game right away (what pressing start does) */
 void game_step(GameState *state, const GameInput *input);
 void game_render(GameState *state, const GameRenderer *renderer);
+
+/* Sound effects triggered since the last call, as a bit mask of 1 << SFX_*. */
+uint16_t game_take_sound_events(GameState *state);
 
 /* High score table <-> file image. unpack returns 1 if the data was valid. */
 void game_scores_pack(const GameState *state, uint8_t *out);

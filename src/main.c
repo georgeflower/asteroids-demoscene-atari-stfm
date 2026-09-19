@@ -1,7 +1,21 @@
 #include "game.h"
 #include "platform.h"
+#include "sound.h"
 
 #include <stddef.h>
+
+/* Hand the game's sound events, and the looping sounds, to the sound engine. */
+static void play_sounds(GameState *game) {
+    const uint16_t events = game_take_sound_events(game);
+    int sfx;
+
+    for (sfx = 1; sfx < SFX_COUNT; ++sfx) {
+        if (events & (1u << sfx)) {
+            sound_play(sfx);
+        }
+    }
+    sound_set_thrust(game->mode == GAME_MODE_PLAYING && game->ship.thrusting && !game->paused);
+}
 
 int main(void) {
     GameState game;
@@ -21,6 +35,7 @@ int main(void) {
         return 1;
     }
 
+    sound_init(platform_sound_write);
     game_init(&game, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
     if (platform_load_scores(score_file, (int) sizeof(score_file)) == (int) sizeof(score_file)) {
         (void) game_scores_unpack(&game, score_file);
@@ -35,6 +50,8 @@ int main(void) {
         /* one game step per vertical blank, so the game keeps its speed when a frame takes longer */
         for (steps = platform_take_elapsed_frames(); steps > 0; --steps) {
             game_step(&game, &input);
+            play_sounds(&game);
+            sound_tick();
         }
         if (game.scores_changed) {
             game_scores_pack(&game, score_file);
@@ -47,6 +64,7 @@ int main(void) {
         platform_end_frame();
     }
 
+    sound_silence();
     platform_shutdown();
     return 0;
 }

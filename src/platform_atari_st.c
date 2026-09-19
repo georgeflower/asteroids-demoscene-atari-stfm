@@ -17,6 +17,8 @@
 #define ST_VIDEO_BASE_HIGH (*(volatile uint8_t *) 0xff8201UL)
 #define ST_VIDEO_BASE_MID (*(volatile uint8_t *) 0xff8203UL)
 #define ST_HW_PALETTE ((volatile uint16_t *) 0xff8240UL)
+#define ST_PSG_SELECT (*(volatile uint8_t *) 0xff8800UL)
+#define ST_PSG_DATA (*(volatile uint8_t *) 0xff8802UL)
 
 /* The playing field in 16-pixel groups and rows, for the rectangle clear. */
 #define FIELD_GROUP0 (PLATFORM_FIELD_X / 16)
@@ -413,6 +415,17 @@ void platform_end_frame(void) {
     show_buffer = finished;
 }
 
+/* Register select and data write must not be split by an interrupt (TOS also uses the chip for floppy select). */
+void platform_sound_write(uint8_t reg, uint8_t value) {
+    unsigned short saved_sr;
+
+    __asm__ volatile ("move.w %%sr,%0" : "=d" (saved_sr) : : "memory");
+    __asm__ volatile ("ori.w #0x0700,%%sr" : : : "cc", "memory");
+    ST_PSG_SELECT = reg;
+    ST_PSG_DATA = value;
+    __asm__ volatile ("move.w %0,%%sr" : : "d" (saved_sr) : "cc", "memory");
+}
+
 int platform_load_scores(uint8_t *data, int size) {
     FILE *file = fopen(SCORE_FILE, "rb");
     int count = 0;
@@ -491,6 +504,11 @@ void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1) {
 
 int platform_take_elapsed_frames(void) {
     return 1;
+}
+
+void platform_sound_write(uint8_t reg, uint8_t value) {
+    (void) reg;
+    (void) value;
 }
 
 int platform_load_scores(uint8_t *data, int size) {
