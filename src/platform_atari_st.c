@@ -86,8 +86,8 @@ static void set_palette(void) {
     static const uint16_t palette[ST_PALETTE_COLORS] = {
         0x000, 0x272, 0x777, 0x741,   /* black field, ship+bullets, large rock, thrust flame */
         0x467, 0x124, 0x770, 0x722,   /* medium rock, frame, yellow, red */
-        0x247, 0x555, 0x757, 0x333,   /* small rock, grey */
-        0x057, 0x444, 0x666, 0x111
+        0x247, 0x555, 0x757, 0x333,   /* small rock, grey, magenta, dim star */
+        0x057, 0x531, 0x527, 0x666    /* cyan, brown alien, purple swarm, bright star */
     };
     int i;
 

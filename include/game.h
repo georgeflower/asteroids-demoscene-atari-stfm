@@ -18,6 +18,8 @@
 #define GAME_MAX_BULLETS 12
 #define GAME_MAX_ASTEROID_POINTS 11
 #define GAME_MAX_POWERUPS 4
+#define GAME_MAX_ENEMIES 12
+#define GAME_MAX_ENEMY_BULLETS 16
 #define GAME_STAR_COUNT 18
 #define GAME_FIX_SHIFT 16
 #define GAME_FIX_ONE (1L << GAME_FIX_SHIFT)
@@ -47,6 +49,9 @@
 #define GAME_COLOR_GREY 9
 #define GAME_COLOR_MAGENTA 10
 #define GAME_COLOR_STAR_DIM 11
+#define GAME_COLOR_CYAN 12
+#define GAME_COLOR_BROWN 13
+#define GAME_COLOR_PURPLE 14
 #define GAME_COLOR_STAR_BRIGHT 15
 #define GAME_COLOR_WHITE GAME_COLOR_ASTEROID_LARGE
 
@@ -92,6 +97,7 @@ typedef struct GameBullet {
     int32_t vy;
     uint8_t active;
     uint8_t life;
+    uint8_t color;      /* enemy bullets only */
 } GameBullet;
 
 typedef struct GameAsteroid {
@@ -147,6 +153,61 @@ typedef struct GameStar {
     uint8_t fresh_frames;  /* frames the new pixel still has to be drawn every frame (once per screen buffer) */
 } GameStar;
 
+enum {
+    GAME_ENEMY_NONE = 0,
+    GAME_ENEMY_UFO_LARGE,
+    GAME_ENEMY_UFO_SMALL,
+    GAME_ENEMY_BROWN,
+    GAME_ENEMY_GREEN,
+    GAME_ENEMY_BLUE,
+    GAME_ENEMY_PURPLE
+};
+
+enum {
+    GAME_BOSS_NONE = 0,
+    GAME_BOSS_AMIGA_BALL,
+    GAME_BOSS_FLYING_SAUCER,
+    GAME_BOSS_TENTACLE,
+    GAME_BOSS_BORG_CUBE
+};
+
+/* UFOs and the four kinds of alien. timer / timer2 / burst / flags are behaviour state that means
+   something different for each kind (flags: 1 = invisible, 2 = charging a teleport). */
+typedef struct GameEnemy {
+    int32_t x;
+    int32_t y;
+    int32_t vx;
+    int32_t vy;
+    uint16_t phase;
+    uint16_t age;
+    int16_t timer;
+    int16_t timer2;
+    uint8_t active;
+    uint8_t kind;
+    uint8_t hp;
+    uint8_t burst;
+    uint8_t flock;
+    uint8_t flags;
+} GameEnemy;
+
+typedef struct GameBoss {
+    int32_t x;
+    int32_t y;
+    int32_t vx;
+    int32_t vy;
+    int32_t target_y;
+    int16_t hp;
+    int16_t max_hp;
+    uint16_t phase;
+    uint16_t angle;
+    int16_t timer;
+    int16_t timer2;
+    uint8_t active;
+    uint8_t kind;
+    uint8_t entered;
+    uint8_t flash;
+} GameBoss;
+
 typedef struct GameHighScore {
     uint32_t score;
     char initials[4];
@@ -175,6 +236,12 @@ typedef struct GameState {
     GameBullet bullets[GAME_MAX_BULLETS];
     GameAsteroid asteroids[GAME_MAX_ASTEROIDS];
     GamePowerUp powerups[GAME_MAX_POWERUPS];
+    GameEnemy enemies[GAME_MAX_ENEMIES];
+    GameBullet enemy_bullets[GAME_MAX_ENEMY_BULLETS];
+    GameBoss boss;
+    int16_t ufo_timer;          /* frames until the next UFO / alien is due */
+    int16_t alien_timer;
+    uint8_t ufo_present;        /* a UFO or the flying saucer is on screen (for its warble) */
     GameStar stars[GAME_STAR_COUNT];
     int16_t star_points[GAME_STAR_COUNT * 2];   /* screen x,y of every star, grouped by layer */
     uint16_t shield_timer;      /* frames left of each active power-up */

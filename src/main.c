@@ -15,6 +15,7 @@ static void play_sounds(GameState *game) {
         }
     }
     sound_set_thrust(game->mode == GAME_MODE_PLAYING && game->ship.thrusting && !game->paused);
+    sound_set_ufo(game->mode == GAME_MODE_PLAYING && game->ufo_present && !game->paused);
 }
 
 int main(void) {
