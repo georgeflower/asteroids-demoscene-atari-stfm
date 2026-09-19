@@ -261,7 +261,9 @@ typedef struct GameState {
     uint8_t screen_refresh;     /* frames of the full static screen (title, game over ...) still to draw */
     uint8_t prompt_refresh;
     uint8_t prompt_visible;
-    uint8_t hud_refresh;
+    uint8_t hud_refresh;        /* frames of the whole HUD still to draw */
+    uint8_t hud_field[8];       /* frames each HUD field still has to be drawn after a change */
+    uint8_t hud_hyper_full;     /* frames the whole hyperspace field (label included) still has to be drawn */
     uint32_t hud_score;
     uint32_t hud_high;
     uint8_t hud_lives;
@@ -275,6 +277,11 @@ typedef void (*GameLineDrawer)(void *context, int x0, int y0, int x1, int y1, ui
 /* Optional: draws a closed outline in one call. points holds x,y pairs (screen space, may lie
    off-screen). When absent, game_render() draws the outline with the line drawer. */
 typedef void (*GamePolygonDrawer)(void *context, const int16_t *points, int count, uint8_t color);
+
+/* Optional, a faster route for the rocks: a closed outline given as a centre and signed byte offsets, which
+   the game only uses when the whole outline lies inside the playing field. */
+typedef void (*GameOffsetPolygonDrawer)(void *context, int center_x, int center_y, const int8_t *off_x,
+                                        const int8_t *off_y, int count, uint8_t color);
 
 /* Optional: called with the screen-space bounding box of everything game_render() draws
    on the playing field, so the platform can erase just those areas next time. */
@@ -297,6 +304,7 @@ typedef struct GameRenderer {
     GameTextDrawer text;
     GameFieldClearer clear_field;
     GamePointDrawer points;
+    GameOffsetPolygonDrawer polygon_offsets;
 } GameRenderer;
 
 /* The field rectangle is where the world is drawn on the screen. The game starts on the title screen. */

@@ -19,6 +19,8 @@ extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_offsets(unsigned char *buffer, long cx, long cy, const signed char *off_x, const signed char *off_y, long count, long plane_offset);
+extern void st_draw_polyline(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 
 static unsigned char buffer_a[SCREEN_BYTES + 2];
@@ -46,7 +48,7 @@ static void test_polygons(void) {
     for (plane = 0; plane < 4; ++plane) {
         for (trial = 0; trial < 700; ++trial) {
             short points[24];
-            const int count = 3 + (int) rand_below(9);
+            const int count = 1 + (int) rand_below(11);
             int index;
             int mode = trial % 5;
 
@@ -80,6 +82,69 @@ static void test_polygons(void) {
             if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
                 report("polygon vs lines, plane", plane);
             }
+        }
+    }
+}
+
+/* The offsets variant must match the point-list polygon for the same points. */
+static void test_poly_offsets(void) {
+    int trial;
+
+    for (trial = 0; trial < 1500; ++trial) {
+        signed char off_x[12];
+        signed char off_y[12];
+        short points[24];
+        const int count = 3 + (int) rand_below(9);
+        const int cx = 25 + (int) rand_below(WIDTH - 50);
+        const int cy = 25 + (int) rand_below(HEIGHT - 50);
+        const int plane = trial & 3;
+        int index;
+
+        for (index = 0; index < count; ++index) {
+            off_x[index] = (signed char) ((int) rand_below(41) - 20);
+            off_y[index] = (signed char) ((int) rand_below(41) - 20);
+            points[index * 2] = (short) (cx + off_x[index]);
+            points[index * 2 + 1] = (short) (cy + off_y[index]);
+        }
+        memset(buffer_a, 0, sizeof(buffer_a));
+        memset(buffer_b, 0, sizeof(buffer_b));
+        st_draw_poly_offsets(buffer_a, cx, cy, off_x, off_y, count, plane * 2);
+        st_draw_poly_plane(buffer_b, points, count, plane * 2);
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("poly offsets vs poly", trial);
+        }
+    }
+}
+
+/* An open polyline must match its lines drawn one by one, including 1 and 2 points. */
+static void test_polyline(void) {
+    int trial;
+
+    for (trial = 0; trial < 1500; ++trial) {
+        short points[24];
+        const int count = 1 + (int) rand_below(12);
+        const int plane = trial & 3;
+        const int spread = (trial % 3 == 0) ? 12 : 160;
+        int index;
+
+        for (index = 0; index < count; ++index) {
+            points[index * 2] = (short) (100 + (int) rand_below((unsigned) spread * 2) - spread + 60);
+            points[index * 2 + 1] = (short) (50 + (int) rand_below((unsigned) (spread < 100 ? spread * 2 : 150)));
+        }
+        memset(buffer_a, 0, sizeof(buffer_a));
+        memset(buffer_b, 0, sizeof(buffer_b));
+        st_draw_polyline(buffer_a, points, count, plane * 2);
+        if (count == 1) {
+            st_draw_line_plane(buffer_b, points[0], points[1], points[0], points[1], plane * 2);
+        }
+        for (index = 0; index + 1 < count; ++index) {
+            st_draw_line_plane(buffer_b, points[index * 2], points[index * 2 + 1], points[index * 2 + 2],
+                               points[index * 2 + 3], plane * 2);
+        }
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("polyline vs lines", trial);
         }
     }
 }
@@ -290,6 +355,8 @@ static void test_text(void) {
 
 int main(void) {
     test_polygons();
+    test_poly_offsets();
+    test_polyline();
     test_plane_matches_four_plane_drawer();
     test_clear_rect();
     test_text();

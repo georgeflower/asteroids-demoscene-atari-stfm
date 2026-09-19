@@ -129,6 +129,7 @@ static GameRenderer make_renderer(void) {
     renderer.text = capture_text;
     renderer.clear_field = capture_clear;
     renderer.points = capture_points;
+    renderer.polygon_offsets = NULL;
     return renderer;
 }
 
@@ -1295,17 +1296,17 @@ static void test_sound_engine(void) {
         CHECK((psg_state[7] & 0x3f) == 0x3f);
     }
 
-    /* shot: voice A tone sweeping down in pitch (period rises 8 per frame), volume 12 falling to 0 */
+    /* shot: a soft pew, voice A tone sweeping down in pitch (period rises 12 per frame), volume 9 falling to 0 */
     psg_start();
     sound_play(SFX_SHOOT);
     psg_ticks(1);
-    CHECK(psg_state[0] == 70 && psg_state[1] == 0);
-    CHECK(psg_state[8] == 12);
+    CHECK(psg_state[0] == 150 && psg_state[1] == 0);
+    CHECK(psg_state[8] == 9);
     CHECK((psg_state[7] & 0x01) == 0);   /* tone A on */
     CHECK((psg_state[7] & 0x08) != 0);   /* noise A off */
     psg_ticks(5);
-    CHECK(psg_state[0] == 70 + 8 * 5);
-    CHECK(psg_state[8] == 12 - 5);
+    CHECK(psg_state[0] == 150 + 12 * 5);
+    CHECK(psg_state[8] == 9 - 5);
     psg_ticks(20);
     CHECK(psg_state[8] == 0);
     CHECK((psg_state[7] & 0x3f) == 0x3f);   /* everything switched off again */
@@ -2541,6 +2542,62 @@ static void test_boss_hit_flash_and_sound(void) {
     CHECK(events_contain_bit(game_take_sound_events(&state), SFX_BOSS_HIT));
 }
 
+static int offset_calls;
+
+static void capture_offsets(void *context, int center_x, int center_y, const int8_t *off_x, const int8_t *off_y,
+                            int count, uint8_t color) {
+    int index;
+
+    ++offset_calls;
+    for (index = 0; index < count; ++index) {
+        const int next = (index + 1 == count) ? 0 : index + 1;
+
+        capture_line(context, center_x + off_x[index], center_y + off_y[index], center_x + off_x[next],
+                     center_y + off_y[next], color);
+    }
+}
+
+/* Rocks well inside the field go through the offsets route, edge rocks through the plain polygon route, and
+   both draw exactly the same lines. */
+static void test_rock_offset_route(void) {
+    GameState state;
+    GameRenderer renderer;
+    int lines_a[MAX_LINES][4];
+    int count_a;
+    int index;
+    int at_edge;
+
+    for (at_edge = 0; at_edge < 2; ++at_edge) {
+        quiet_playing(&state, 12);
+        state.asteroids[1] = state.asteroids[0];
+        state.asteroids[1].size = GAME_ASTEROID_LARGE;
+        state.asteroids[1].point_count = 10;
+        state.asteroids[1].x = (at_edge ? 2L : 160L) << GAME_FIX_SHIFT;
+        state.asteroids[1].y = 120L << GAME_FIX_SHIFT;
+        for (index = 0; index < 10; ++index) {
+            state.asteroids[1].radius[index] = (uint8_t) (14 + index % 4);
+        }
+
+        renderer = make_renderer();
+        reset_capture();
+        game_render(&state, &renderer);
+        count_a = line_count < MAX_LINES ? line_count : MAX_LINES;
+        memcpy(lines_a, lines, sizeof(lines_a));
+
+        state.asteroids[1].cache_valid = 0;
+        state.asteroids[0].cache_valid = 0;
+        state.screen_refresh = 0;
+        renderer.polygon_offsets = capture_offsets;
+        offset_calls = 0;
+        reset_capture();
+        game_render(&state, &renderer);
+        CHECK(line_count == count_a);
+        CHECK(memcmp(lines, lines_a, sizeof(int) * 4 * (size_t) count_a) == 0);
+        /* the parked small rock lies inside the field; the big one only takes the offsets route away from the edge */
+        CHECK(offset_calls == (at_edge ? 1 : 2));
+    }
+}
+
 static void test_enemy_rendering(void) {
     GameState state;
     int kind;
@@ -2697,6 +2754,7 @@ int main(void) {
     test_boss_hurts_the_ship();
     test_boss_hit_flash_and_sound();
     test_enemy_rendering();
+    test_rock_offset_route();
     test_dirty_rects_with_enemies();
     test_sound_engine();
     test_game_sound_events();

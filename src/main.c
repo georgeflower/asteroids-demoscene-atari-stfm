@@ -32,6 +32,7 @@ int main(void) {
     renderer.text = platform_draw_text;
     renderer.clear_field = platform_clear_field;
     renderer.points = platform_draw_points;
+    renderer.polygon_offsets = platform_draw_polygon_offsets;
 
     if (!platform_init()) {
         return 1;

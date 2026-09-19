@@ -19,7 +19,7 @@ ATARI_ASMS := $(SRC_DIR)/st_video.S $(SRC_DIR)/st_ikbd.S
 ATARI_OBJS := $(ATARI_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o) $(ATARI_ASMS:$(SRC_DIR)/%.S=$(BUILD_DIR)/%.o)
 TEST_SRCS := $(TEST_DIR)/game_tests.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c
 
-.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari screens-atari enemies-atari bench-atari host-sanity clean
+.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari test-poly-atari screens-atari enemies-atari micro-atari prof-atari bench-atari host-sanity clean
 
 all: atari-st disk-image
 
@@ -61,6 +61,9 @@ test-gfx-atari: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_gfx_test.c $(SRC_DIR)/st_video.S $(SRC_DIR)/st_text.c $(LDFLAGS) -o $(BUILD_DIR)/GFXTEST.PRG
 
 # Keyboard diagnostic: logs which keys reach the game (run in Hatari, read C:\KEYTEST.LOG).
+test-poly-atari: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_poly_test.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/POLYTEST.PRG
+
 test-keys-atari: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_key_test.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/KEYTEST.PRG
 
@@ -75,6 +78,15 @@ screens-atari: $(BUILD_DIR)
 # Line-up of every enemy and the four bosses (run in Hatari, take screenshots).
 enemies-atari: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_enemies.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/ENEMIES.PRG
+
+# Timings of the drawing primitives (run in Hatari, results in C:\MICRO.LOG).
+micro-atari: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_micro.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/MICRO.PRG
+
+# Sampling profiler (run in Hatari, results in C:\PROF.BIN; see tools/prof_report.py): make prof-atari WAVE=4
+WAVE ?= 4
+prof-atari: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DPROF_WAVE=$(WAVE) -DATARI_ST_TARGET $(TEST_DIR)/atari_prof.c $(TEST_DIR)/prof_isr.S $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) -o $(BUILD_DIR)/PROF.PRG
 
 # Frame-cost benchmark (run in Hatari): game step + clear + render for a few wave sizes.
 bench-atari: $(BUILD_DIR)

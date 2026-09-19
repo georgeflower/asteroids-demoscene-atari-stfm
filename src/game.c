@@ -1775,11 +1775,19 @@ static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, const 
         rebuild_asteroid_cache(state, asteroid, orientation);
     }
 
-    for (vertex = 0; vertex < count; ++vertex) {
-        points[vertex * 2] = (int16_t) (center_x + asteroid->off_x[vertex]);
-        points[vertex * 2 + 1] = (int16_t) (center_y + asteroid->off_y[vertex]);
+    if (renderer->polygon_offsets != NULL && center_x + asteroid->bound_x0 >= (int) state->field_x &&
+        center_x + asteroid->bound_x1 < (int) (state->field_x + state->field_width) &&
+        center_y + asteroid->bound_y0 >= (int) state->field_y &&
+        center_y + asteroid->bound_y1 < (int) (state->field_y + state->field_height)) {
+        renderer->polygon_offsets(renderer->context, center_x, center_y, asteroid->off_x, asteroid->off_y, count,
+                                  asteroid_color_table[asteroid->size]);
+    } else {
+        for (vertex = 0; vertex < count; ++vertex) {
+            points[vertex * 2] = (int16_t) (center_x + asteroid->off_x[vertex]);
+            points[vertex * 2 + 1] = (int16_t) (center_y + asteroid->off_y[vertex]);
+        }
+        draw_outline(renderer, points, count, asteroid_color_table[asteroid->size]);
     }
-    draw_outline(renderer, points, count, asteroid_color_table[asteroid->size]);
 
     mark_rect(renderer, center_x + asteroid->bound_x0, center_y + asteroid->bound_y0,
               center_x + asteroid->bound_x1, center_y + asteroid->bound_y1);
@@ -2207,44 +2215,86 @@ static uint8_t hyperspace_percent(const GameState *state) {
     return (uint8_t) (mul16((int16_t) (GAME_HYPERSPACE_RECHARGE_FRAMES - state->ship.hyperspace_cooldown), 205) >> 10);
 }
 
-static void draw_hud(const GameState *state, const GameRenderer *renderer) {
+/* The HUD is drawn field by field, so a changing hyperspace percentage or power-up timer does not redraw
+   the whole strip (text is expensive on the 68000). */
+enum {
+    HUD_SCORE,
+    HUD_HIGH,
+    HUD_WAVE,
+    HUD_LIVES,
+    HUD_HYPER,
+    HUD_POWER,
+    HUD_FIELDS = HUD_POWER + 3
+};
+
+static void draw_hud_field(const GameState *state, const GameRenderer *renderer, int field, int hyper_full) {
     char text[16];
     char icons[10];
-    const uint32_t high = (state->high_scores[0].score > state->score) ? state->high_scores[0].score : state->score;
     int index;
     int count;
 
-    memcpy(text, "SCORE ", 6);
-    format_number(text + 6, state->score % 1000000u, 6);
-    put_text(renderer, 8, 0, text, GAME_COLOR_YELLOW, GAME_COLOR_FRAME, 1);
+    switch (field) {
+    case HUD_SCORE:
+        memcpy(text, "SCORE ", 6);
+        format_number(text + 6, state->score % 1000000u, 6);
+        put_text(renderer, 8, 0, text, GAME_COLOR_YELLOW, GAME_COLOR_FRAME, 1);
+        break;
+    case HUD_HIGH: {
+        const uint32_t high = (state->high_scores[0].score > state->score) ? state->high_scores[0].score : state->score;
 
-    memcpy(text, "HI ", 3);
-    format_number(text + 3, high % 1000000u, 6);
-    put_text(renderer, 120, 0, text, GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
-
-    memcpy(text, "WAVE ", 5);
-    format_number(text + 5, state->wave % 100u, 2);
-    put_text(renderer, 240, 0, text, GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
-
-    put_text(renderer, 8, 8, "LIVES ", GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
-    memset(icons, ' ', 8);
-    icons[8] = 0;
-    if (state->lives <= 6) {
-        for (index = 0; index < state->lives; ++index) {
-            icons[index] = 127;
-        }
-    } else {
-        icons[0] = 127;
-        icons[1] = 'X';
-        icons[2] = (char) ('0' + state->lives);
+        memcpy(text, "HI ", 3);
+        format_number(text + 3, high % 1000000u, 6);
+        put_text(renderer, 120, 0, text, GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
+        break;
     }
-    put_text(renderer, 56, 8, icons, GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
-
-    for (index = 0; index < 3; ++index) {
+    case HUD_WAVE:
+        memcpy(text, "WAVE ", 5);
+        format_number(text + 5, state->wave % 100u, 2);
+        put_text(renderer, 240, 0, text, GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
+        break;
+    case HUD_LIVES:
+        put_text(renderer, 8, 8, "LIVES ", GAME_COLOR_WHITE, GAME_COLOR_FRAME, 1);
+        memset(icons, ' ', 8);
+        icons[8] = 0;
+        if (state->lives <= 6) {
+            for (index = 0; index < state->lives; ++index) {
+                icons[index] = 127;
+            }
+        } else {
+            icons[0] = 127;
+            icons[1] = 'X';
+            icons[2] = (char) ('0' + state->lives);
+        }
+        put_text(renderer, 56, 8, icons, GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
+        break;
+    case HUD_HYPER:
+        count = hyperspace_percent(state);
+        if (count >= 100) {
+            put_text(renderer, 120, 8, "HYPER READY ", GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
+        } else if (hyper_full) {
+            memcpy(text, "HYPER ", 6);
+            format_number(text + 6, (uint32_t) count, 2);
+            text[8] = '%';
+            text[9] = ' ';
+            text[10] = ' ';
+            text[11] = 0;
+            put_text(renderer, 120, 8, text, GAME_COLOR_GREY, GAME_COLOR_FRAME, 1);
+        } else {
+            /* only the digits change while recharging: the label is already there */
+            format_number(text, (uint32_t) count, 2);
+            text[2] = '%';
+            text[3] = ' ';
+            text[4] = ' ';
+            text[5] = 0;
+            put_text(renderer, 168, 8, text, GAME_COLOR_GREY, GAME_COLOR_FRAME, 1);
+        }
+        break;
+    default: {
         static const char letters[3] = {'S', 'R', 'X'};
         static const uint8_t colors[3] = {GAME_COLOR_SHIP, GAME_COLOR_RED, GAME_COLOR_YELLOW};
         char badge[4];
 
+        index = field - HUD_POWER;
         if (state->hud_powers[index] > 0) {
             badge[0] = letters[index];
             format_number(badge + 1, state->hud_powers[index] % 100u, 2);
@@ -2252,19 +2302,8 @@ static void draw_hud(const GameState *state, const GameRenderer *renderer) {
             memcpy(badge, "   ", 4);
         }
         put_text(renderer, 224 + index * 32, 8, badge, colors[index], GAME_COLOR_FRAME, 1);
+        break;
     }
-
-    count = hyperspace_percent(state);
-    if (count >= 100) {
-        put_text(renderer, 120, 8, "HYPER READY ", GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
-    } else {
-        memcpy(text, "HYPER ", 6);
-        format_number(text + 6, (uint32_t) count, 2);
-        text[8] = '%';
-        text[9] = ' ';
-        text[10] = ' ';
-        text[11] = 0;
-        put_text(renderer, 120, 8, text, GAME_COLOR_GREY, GAME_COLOR_FRAME, 1);
     }
 }
 
@@ -2273,27 +2312,55 @@ static uint8_t power_seconds(uint16_t frames) {
 }
 
 static void update_hud(GameState *state, const GameRenderer *renderer) {
-    const uint32_t high = state->high_scores[0].score;
+    const uint32_t high = (state->high_scores[0].score > state->score) ? state->high_scores[0].score : state->score;
     const uint8_t percent = hyperspace_percent(state);
-    const uint8_t shield_s = power_seconds(state->shield_timer);
-    const uint8_t rapid_s = power_seconds(state->rapid_timer);
-    const uint8_t multiplier_s = power_seconds(state->multiplier_timer);
+    const uint8_t seconds[3] = {power_seconds(state->shield_timer), power_seconds(state->rapid_timer),
+                                power_seconds(state->multiplier_timer)};
+    int field;
 
-    if (state->hud_score != state->score || state->hud_high != high || state->hud_lives != state->lives ||
-        state->hud_wave != state->wave || state->hud_hyperspace != percent || state->hud_powers[0] != shield_s ||
-        state->hud_powers[1] != rapid_s || state->hud_powers[2] != multiplier_s) {
-        state->hud_powers[0] = shield_s;
-        state->hud_powers[1] = rapid_s;
-        state->hud_powers[2] = multiplier_s;
+    /* a changed field is drawn on this frame and the next, to fill both screen buffers */
+    if (state->hud_score != state->score) {
         state->hud_score = state->score;
+        state->hud_field[HUD_SCORE] = 2;
+    }
+    if (state->hud_high != high) {
         state->hud_high = high;
-        state->hud_lives = state->lives;
+        state->hud_field[HUD_HIGH] = 2;
+    }
+    if (state->hud_wave != state->wave) {
         state->hud_wave = state->wave;
+        state->hud_field[HUD_WAVE] = 2;
+    }
+    if (state->hud_lives != state->lives) {
+        state->hud_lives = state->lives;
+        state->hud_field[HUD_LIVES] = 2;
+    }
+    if (state->hud_hyperspace != percent) {
+        if ((state->hud_hyperspace >= 100) != (percent >= 100)) {
+            state->hud_hyper_full = 2;   /* READY <-> charging changes the label too */
+        }
         state->hud_hyperspace = percent;
-        state->hud_refresh = 2;
+        state->hud_field[HUD_HYPER] = 2;
+    }
+    for (field = 0; field < 3; ++field) {
+        if (state->hud_powers[field] != seconds[field]) {
+            state->hud_powers[field] = seconds[field];
+            state->hud_field[HUD_POWER + field] = 2;
+        }
+    }
+
+    for (field = 0; field < HUD_FIELDS; ++field) {
+        if (state->hud_refresh > 0 || state->hud_field[field] > 0) {
+            draw_hud_field(state, renderer, field, state->hud_refresh > 0 || state->hud_hyper_full > 0);
+            if (state->hud_field[field] > 0) {
+                --state->hud_field[field];
+            }
+        }
+    }
+    if (state->hud_hyper_full > 0) {
+        --state->hud_hyper_full;
     }
     if (state->hud_refresh > 0) {
-        draw_hud(state, renderer);
         --state->hud_refresh;
     }
 }

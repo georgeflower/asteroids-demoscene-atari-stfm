@@ -82,14 +82,29 @@ clearend:
 	movem.l	(%sp)+,%d2-%d7
 	rts
 
-| Closed polygon outline in one bitplane of a low-resolution screen.
+| Closed polygon outline, or open polyline, in one bitplane of a low-resolution screen.
 | void st_draw_poly_plane(unsigned char *buf, const short *points, long count, long plane_offset)
+| void st_draw_polyline(unsigned char *buf, const short *points, long count, long plane_offset)
 | points are x,y word pairs, all inside 0..319 x 0..199. plane_offset is 0, 2, 4 or 6.
-| Same Bresenham as st_draw_line_plane, but one call per outline and a tight
-| inner loop for each of the four directions.
+| The same Bresenham as a single line, edge by edge, but the first point is plotted once and every
+| edge then only steps and plots, so each edge carries on from where the last one ended: no
+| per-edge address set-up and no pixel plotted twice at the corners. The loops below step first
+| and plot second. The polygon has count edges (the last one back to the first point), the
+| polyline count - 1.
 	.globl	_st_draw_poly_plane
 _st_draw_poly_plane:
 	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	56(%sp),%d5
+	beq.w	polydone
+	subq.w	#1,%d5			| d5 = edges - 1, for dbra
+	bra.s	polyentry
+	.globl	_st_draw_polyline
+_st_draw_polyline:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	56(%sp),%d5
+	beq.w	polydone
+	subq.w	#2,%d5
+polyentry:
 	move.l	48(%sp),%a2
 	add.l	60(%sp),%a2		| a2 = buffer + plane offset
 	move.l	52(%sp),%a3		| a3 = current point
@@ -97,28 +112,30 @@ _st_draw_poly_plane:
 	move.l	56(%sp),%d0
 	lsl.l	#2,%d0
 	lea	0(%a3,%d0.l),%a4	| a4 = end of the point list
+	move.w	(%a3),%d3		| first pixel
+	move.w	2(%a3),%d6
+	mulu.w	#160,%d6
+	lea	0(%a2,%d6.l),%a0
+	move.w	%d3,%d6
+	lsr.w	#4,%d6
+	lsl.w	#3,%d6
+	adda.w	%d6,%a0
+	moveq	#15,%d6
+	and.w	%d3,%d6
+	move.w	#0x8000,%d0
+	lsr.w	%d6,%d0			| pixel mask
+	or.w	%d0,(%a0)
+	tst.w	%d5
+	bmi.w	polydone
 edge:
-	move.w	(%a3),%d5		| x0
-	move.w	2(%a3),%d6		| y0
 	lea	4(%a3),%a6		| next point, wrapping to the first
 	cmp.l	%a4,%a6
 	bcs.s	1f
 	move.l	%a5,%a6
 1:	move.w	(%a6),%d1
+	sub.w	(%a3),%d1		| dx
 	move.w	2(%a6),%d2
-	sub.w	%d5,%d1			| dx
-	sub.w	%d6,%d2			| dy
-	move.w	%d6,%d3
-	mulu.w	#160,%d3
-	lea	0(%a2,%d3.l),%a0
-	move.w	%d5,%d3
-	lsr.w	#4,%d3
-	lsl.w	#3,%d3
-	adda.w	%d3,%a0
-	moveq	#15,%d3
-	and.w	%d5,%d3
-	move.w	#0x8000,%d0
-	lsr.w	%d3,%d0			| pixel mask
+	sub.w	2(%a3),%d2		| dy
 	movea.w	#160,%a1
 	tst.w	%d2
 	bpl.s	2f
@@ -131,13 +148,14 @@ edge:
 	moveq	#1,%d4
 3:	cmp.w	%d2,%d1
 	bcs.w	ymajor
-	move.w	%d1,%d7
+	move.w	%d1,%d7			| steps along x
+	beq.w	edgedone		| no steps (a zero-length edge)
 	move.w	%d1,%d3
 	lsr.w	#1,%d3
+	subq.w	#1,%d7
 	tst.w	%d4
 	bne.s	xleft
 xright:
-	or.w	%d0,(%a0)
 	sub.w	%d2,%d3
 	bpl.s	4f
 	add.w	%d1,%d3
@@ -145,10 +163,10 @@ xright:
 4:	ror.w	#1,%d0
 	bcc.s	5f
 	addq.l	#8,%a0
-5:	dbra	%d7,xright
-	bra.w	edgedone
+5:	or.w	%d0,(%a0)
+	dbra	%d7,xright
+	bra.s	edgedone
 xleft:
-	or.w	%d0,(%a0)
 	sub.w	%d2,%d3
 	bpl.s	6f
 	add.w	%d1,%d3
@@ -156,16 +174,17 @@ xleft:
 6:	rol.w	#1,%d0
 	bcc.s	7f
 	subq.l	#8,%a0
-7:	dbra	%d7,xleft
-	bra.w	edgedone
+7:	or.w	%d0,(%a0)
+	dbra	%d7,xleft
+	bra.s	edgedone
 ymajor:
-	move.w	%d2,%d7
+	move.w	%d2,%d7			| steps along y
 	move.w	%d2,%d3
 	lsr.w	#1,%d3
+	subq.w	#1,%d7
 	tst.w	%d4
 	bne.s	yleft
 yright:
-	or.w	%d0,(%a0)
 	sub.w	%d1,%d3
 	bpl.s	8f
 	add.w	%d2,%d3
@@ -173,10 +192,10 @@ yright:
 	bcc.s	8f
 	addq.l	#8,%a0
 8:	adda.w	%a1,%a0
+	or.w	%d0,(%a0)
 	dbra	%d7,yright
 	bra.s	edgedone
 yleft:
-	or.w	%d0,(%a0)
 	sub.w	%d1,%d3
 	bpl.s	9f
 	add.w	%d2,%d3
@@ -184,12 +203,50 @@ yleft:
 	bcc.s	9f
 	subq.l	#8,%a0
 9:	adda.w	%a1,%a0
+	or.w	%d0,(%a0)
 	dbra	%d7,yleft
 edgedone:
 	addq.l	#4,%a3
-	cmp.l	%a4,%a3
-	bcs.w	edge
+	dbra	%d5,edge
+polydone:
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
+| Same outline, but given as a centre and byte offsets (the game's cached rock shapes), all known to
+| lie inside the screen.
+| void st_draw_poly_offsets(unsigned char *buf, long cx, long cy, const signed char *ox,
+|                           const signed char *oy, long count, long plane_offset)
+| count is at most 12.
+	.globl	_st_draw_poly_offsets
+_st_draw_poly_offsets:
+	link.w	%a6,#-48
+	movem.l	%d2-%d4/%a2-%a3,-(%sp)
+	move.l	12(%a6),%d0		| cx
+	move.l	16(%a6),%d1		| cy
+	move.l	20(%a6),%a0		| ox
+	move.l	24(%a6),%a1		| oy
+	move.l	28(%a6),%d2		| count
+	lea	-48(%a6),%a2
+	movea.l	%a2,%a3
+	move.w	%d2,%d3
+	subq.w	#1,%d3
+1:	move.b	(%a0)+,%d4
+	ext.w	%d4
+	add.w	%d0,%d4
+	move.w	%d4,(%a3)+
+	move.b	(%a1)+,%d4
+	ext.w	%d4
+	add.w	%d1,%d4
+	move.w	%d4,(%a3)+
+	dbra	%d3,1b
+	move.l	32(%a6),-(%sp)		| plane offset
+	move.l	%d2,-(%sp)		| count
+	move.l	%a2,-(%sp)		| points
+	move.l	8(%a6),-(%sp)		| buffer
+	jsr	_st_draw_poly_plane
+	lea	16(%sp),%sp
+	movem.l	(%sp)+,%d2-%d4/%a2-%a3
+	unlk	%a6
 	rts
 
 | Low-resolution 320x200, 4-plane line drawer.
@@ -287,86 +344,21 @@ _st_draw_line_low:
 10:	movem.l	(%sp)+,%d2-%d7/%a2
 	rts
 
-| Single-bitplane variant: colour is one of 1, 2, 4, 8, so one indexed OR per pixel.
+| Single-bitplane line: a two-point polyline.
 | void st_draw_line_plane(unsigned char *buf, long x0, long y0, long x1, long y1, long plane_offset)
 | plane_offset is the byte offset of the plane within a 16-pixel group: 0, 2, 4 or 6.
-	.macro	PUTPLANE
-	or.w	%d0,0(%a0,%d5.w)
-	.endm
-
 	.globl	_st_draw_line_plane
 _st_draw_line_plane:
-	movem.l	%d2-%d7/%a2,-(%sp)
-	move.l	32(%sp),%a0
-	move.l	36(%sp),%d6
-	move.l	40(%sp),%d7
-	move.l	44(%sp),%d1
-	move.l	48(%sp),%d2
-	move.l	52(%sp),%d5
-	sub.l	%d6,%d1
-	sub.l	%d7,%d2
-	mulu.w	#160,%d7
-	add.l	%d7,%a0
-	move.l	%d6,%d3
-	lsr.l	#4,%d3
-	lsl.l	#3,%d3
-	add.l	%d3,%a0
-	moveq	#15,%d3
-	and.l	%d6,%d3
-	move.w	#0x8000,%d0
-	lsr.w	%d3,%d0
-	move.l	#160,%a1
-	tst.l	%d2
-	bpl.s	1f
-	neg.l	%d2
-	move.l	#-160,%a1
-1:	moveq	#1,%d4
-	tst.l	%d1
-	bpl.s	2f
-	neg.l	%d1
-	moveq	#-1,%d4
-2:	cmp.l	%d2,%d1
-	blt.s	5f
-	move.l	%d1,%d3
-	lsr.l	#1,%d3
-	move.l	%d1,%d7
-3:	PUTPLANE
-	sub.l	%d2,%d3
-	bpl.s	4f
-	add.l	%d1,%d3
-	add.l	%a1,%a0
-4:	tst.l	%d4
-	bmi.s	6f
-	lsr.w	#1,%d0
-	bne.s	7f
-	move.w	#0x8000,%d0
-	addq.l	#8,%a0
-	bra.s	7f
-6:	lsl.w	#1,%d0
-	bne.s	7f
-	move.w	#1,%d0
-	subq.l	#8,%a0
-7:	dbra	%d7,3b
-	bra.s	10f
-5:	move.l	%d2,%d3
-	lsr.l	#1,%d3
-	move.l	%d2,%d7
-8:	PUTPLANE
-	sub.l	%d1,%d3
-	bpl.s	9f
-	add.l	%d2,%d3
-	tst.l	%d4
-	bmi.s	11f
-	lsr.w	#1,%d0
-	bne.s	9f
-	move.w	#0x8000,%d0
-	addq.l	#8,%a0
-	bra.s	9f
-11:	lsl.w	#1,%d0
-	bne.s	9f
-	move.w	#1,%d0
-	subq.l	#8,%a0
-9:	add.l	%a1,%a0
-	dbra	%d7,8b
-10:	movem.l	(%sp)+,%d2-%d7/%a2
+	subq.l	#8,%sp			| room for the two points
+	move.w	18(%sp),(%sp)		| x0
+	move.w	22(%sp),2(%sp)		| y0
+	move.w	26(%sp),4(%sp)		| x1
+	move.w	30(%sp),6(%sp)		| y1
+	move.l	32(%sp),-(%sp)		| plane offset
+	pea	2.w			| two points
+	pea	8(%sp)			| the points (as they were before the two pushes above)
+	move.l	24(%sp),-(%sp)		| buffer
+	jsr	_st_draw_polyline
+	lea	16(%sp),%sp
+	addq.l	#8,%sp
 	rts

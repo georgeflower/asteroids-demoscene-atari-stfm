@@ -15,10 +15,11 @@
 
 enum {
     MODE_STEP,
-    MODE_MATHS_AND_CLEAR,
-    MODE_RENDER_MATHS,
-    MODE_RENDER_DRAW,
-    MODE_ALL,
+    MODE_RENDER_MATHS,      /* render with the drawing calls stubbed out */
+    MODE_MATHS_DIRTY,       /* ... plus reporting the dirty rectangles */
+    MODE_MATHS_DIRTY_CLEAR, /* ... plus erasing them again */
+    MODE_RENDER_DRAW,       /* render with real drawing (and dirty rectangles) */
+    MODE_ALL,               /* the whole frame: step, erase, render, draw */
     MODE_COUNT
 };
 
@@ -34,6 +35,25 @@ static void null_line(void *context, int x0, int y0, int x1, int y1, uint8_t col
     ++lines_seen;
 }
 
+static void null_polygon(void *context, const int16_t *points, int count, uint8_t color) {
+    (void) context;
+    (void) points;
+    (void) count;
+    (void) color;
+    ++lines_seen;
+}
+
+static void null_offsets(void *context, int cx, int cy, const int8_t *ox, const int8_t *oy, int count, uint8_t color) {
+    (void) context;
+    (void) cx;
+    (void) cy;
+    (void) ox;
+    (void) oy;
+    (void) count;
+    (void) color;
+    ++lines_seen;
+}
+
 static uint32_t run(GameState *state, int mode) {
     GameRenderer maths_only;
     GameRenderer maths_and_dirty;
@@ -44,6 +64,8 @@ static uint32_t run(GameState *state, int mode) {
 
     memset(&maths_only, 0, sizeof(maths_only));
     maths_only.line = null_line;
+    maths_only.polygon = null_polygon;
+    maths_only.polygon_offsets = null_offsets;
     maths_and_dirty = maths_only;
     maths_and_dirty.dirty = platform_mark_dirty;
     memset(&full, 0, sizeof(full));
@@ -53,6 +75,7 @@ static uint32_t run(GameState *state, int mode) {
     full.text = platform_draw_text;
     full.clear_field = platform_clear_field;
     full.points = platform_draw_points;
+    full.polygon_offsets = platform_draw_polygon_offsets;
 
     memset(&input, 0, sizeof(input));
     input.left = 1;   /* manual input: measures the game itself */
@@ -63,10 +86,11 @@ static uint32_t run(GameState *state, int mode) {
         if (mode == MODE_STEP || mode == MODE_ALL) {
             game_step(state, &input);
         }
-        if (mode == MODE_MATHS_AND_CLEAR) {
-            /* render without drawing, only to report the dirty areas, then erase them */
+        if (mode == MODE_MATHS_DIRTY || mode == MODE_MATHS_DIRTY_CLEAR) {
             game_render(state, &maths_and_dirty);
-            platform_begin_frame();
+            if (mode == MODE_MATHS_DIRTY_CLEAR) {
+                platform_begin_frame();
+            }
         }
         if (mode == MODE_ALL) {
             platform_begin_frame();
@@ -92,11 +116,10 @@ static int count_rocks(const GameState *state) {
 }
 
 int main(void) {
-    static const int waves[3] = {1, 4, 8};
-    static const char *const names[MODE_COUNT] = {"game_step", "maths+clear", "render maths", "render+draw", "all"};
-    GameState state;
-    uint32_t ticks[3][MODE_COUNT];
-    int rocks[3];
+    static const int waves[4] = {1, 2, 4, 8};
+        GameState state;
+    uint32_t ticks[4][MODE_COUNT];
+    int rocks[4];
     uint32_t star_ticks = 0;
     int wave_index;
     int mode;
@@ -105,7 +128,7 @@ int main(void) {
         return 1;
     }
 
-    for (wave_index = 0; wave_index < 3; ++wave_index) {
+    for (wave_index = 0; wave_index < 4; ++wave_index) {
         game_init(&state, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
         game_start(&state);
         memset(state.asteroids, 0, sizeof(state.asteroids));
@@ -139,13 +162,15 @@ int main(void) {
 
     platform_shutdown();
 
-    for (wave_index = 0; wave_index < 3; ++wave_index) {
+    printf("ms per frame:\n step maths +dirty +erase draw ALL\n");
+    for (wave_index = 0; wave_index < 4; ++wave_index) {
         printf("wave %d (%d rocks):\n", waves[wave_index], rocks[wave_index]);
         for (mode = 0; mode < MODE_COUNT; ++mode) {
             /* 200 Hz ticks: ms per frame = ticks * 5 / frames, shown with one decimal */
             const unsigned long tenths = (unsigned long) (ticks[wave_index][mode] * 50 / BENCH_FRAMES);
-            printf("  %-13s %lu.%lu ms\n", names[mode], tenths / 10, tenths % 10);
+            printf("%4lu.%lu", tenths / 10, tenths % 10);
         }
+        printf("\n");
     }
     {
         const unsigned long tenths = (unsigned long) (star_ticks * 50 / BENCH_FRAMES);

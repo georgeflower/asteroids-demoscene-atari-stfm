@@ -69,13 +69,13 @@ int main(void) {
 
     sound_play(SFX_SHOOT);
     frames(1);
-    expect("shot tone low", 0, 70, 0xff);
+    expect("shot tone low", 0, 150, 0xff);
     expect("shot tone high", 1, 0, 0x0f);
-    expect("shot volume", 8, 12, 15);
+    expect("shot volume", 8, 9, 15);
     expect("shot mixer: tone A on, ports out", 7, 0xfe, 0xff);
     frames(5);
-    expect("shot pitch falls", 0, 70 + 8 * 5, 0xff);
-    expect("shot volume decays", 8, 12 - 5, 15);
+    expect("shot pitch falls", 0, 150 + 12 * 5, 0xff);
+    expect("shot volume decays", 8, 9 - 5, 15);
     frames(20);
     expect("shot over", 8, 0, 15);
 

@@ -30,11 +30,14 @@
 
 #define SCORE_FILE "ASTROIDS.SCO"
 #define MAX_DIRTY_RECTS 96
+#define POLYGON_MAX_POINTS 24
 
 extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
+extern void st_draw_polyline(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_offsets(unsigned char *buffer, long cx, long cy, const signed char *off_x, const signed char *off_y, long count, long plane_offset);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 extern void st_ikbd_install(void);
 extern void st_ikbd_remove(void);
@@ -298,6 +301,15 @@ static int outcode(long x, long y) {
     return code;
 }
 
+/* (a * b) / c with a single muls.w and divs.w instead of the 32-bit library division. All three are small,
+   and |b| <= |c|, so the quotient fits in 16 bits. Truncates toward zero, like C. */
+static long muldiv16(long a, long b, long c) {
+    long value = (long) (short) a * (short) b;
+
+    __asm__ ("divs.w %1,%0\n\text.l %0" : "+d" (value) : "dm" ((short) c) : "cc");
+    return value;
+}
+
 /* Clip a line to the playing field. Returns 0 when nothing of it is visible. */
 static int clip_line(long *x0, long *y0, long *x1, long *y1) {
     int code0 = outcode(*x0, *y0);
@@ -318,16 +330,16 @@ static int clip_line(long *x0, long *y0, long *x1, long *y1) {
 
         if (code & 8) {
             y = FIELD_Y1;
-            x = *x0 + ((*x1 - *x0) * (y - *y0)) / (*y1 - *y0);
+            x = *x0 + muldiv16(*x1 - *x0, y - *y0, *y1 - *y0);
         } else if (code & 4) {
             y = FIELD_Y0;
-            x = *x0 + ((*x1 - *x0) * (y - *y0)) / (*y1 - *y0);
+            x = *x0 + muldiv16(*x1 - *x0, y - *y0, *y1 - *y0);
         } else if (code & 2) {
             x = FIELD_X1;
-            y = *y0 + ((*y1 - *y0) * (x - *x0)) / (*x1 - *x0);
+            y = *y0 + muldiv16(*y1 - *y0, x - *x0, *x1 - *x0);
         } else {
             x = FIELD_X0;
-            y = *y0 + ((*y1 - *y0) * (x - *x0)) / (*x1 - *x0);
+            y = *y0 + muldiv16(*y1 - *y0, x - *x0, *x1 - *x0);
         }
 
         if (code == code0) {
@@ -372,25 +384,58 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
     }
 }
 
+/* colour must be one of 1, 2, 4, 8 and the outline must lie inside the field */
+void platform_draw_polygon_offsets(void *context, int center_x, int center_y, const int8_t *off_x,
+                                   const int8_t *off_y, int count, uint8_t color) {
+    (void) context;
+    st_draw_poly_offsets(draw_buffer, center_x, center_y, (const signed char *) off_x, (const signed char *) off_y,
+                         count, plane_offset_for(color));
+}
+
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color) {
     int index;
 
-    if (color == 1 || color == 2 || color == 4 || color == 8) {
-        int inside = 1;
+    if ((color == 1 || color == 2 || color == 4 || color == 8) && count <= POLYGON_MAX_POINTS) {
+        uint8_t inside[POLYGON_MAX_POINTS];
+        const long plane = plane_offset_for(color);
+        int outside_points = 0;
+        int run_start = -1;
 
         for (index = 0; index < count; ++index) {
-            if (!inside_field(points[index * 2], points[index * 2 + 1])) {
-                inside = 0;
-                break;
-            }
+            /* one unsigned compare per axis instead of two signed ones */
+            inside[index] = (uint8_t) ((uint16_t) (points[index * 2] - FIELD_X0) <= (uint16_t) (FIELD_X1 - FIELD_X0) &&
+                                       (uint16_t) (points[index * 2 + 1] - FIELD_Y0) <= (uint16_t) (FIELD_Y1 - FIELD_Y0));
+            outside_points += !inside[index];
         }
-        if (inside) {
-            st_draw_poly_plane(draw_buffer, points, count, plane_offset_for(color));
+        if (outside_points == 0) {
+            st_draw_poly_plane(draw_buffer, points, count, plane);
             return;
         }
+
+        /* partly off the field: runs of edges that lie inside go through the fast polyline drawer, the few
+           edges that cross the border are clipped one by one */
+        for (index = 0; index + 1 < count; ++index) {
+            if (inside[index] && inside[index + 1]) {
+                if (run_start < 0) {
+                    run_start = index;
+                }
+                continue;
+            }
+            if (run_start >= 0) {
+                st_draw_polyline(draw_buffer, points + run_start * 2, index - run_start + 1, plane);
+                run_start = -1;
+            }
+            platform_draw_line(context, points[index * 2], points[index * 2 + 1], points[index * 2 + 2],
+                               points[index * 2 + 3], color);
+        }
+        if (run_start >= 0) {
+            st_draw_polyline(draw_buffer, points + run_start * 2, count - run_start, plane);
+        }
+        platform_draw_line(context, points[(count - 1) * 2], points[(count - 1) * 2 + 1], points[0], points[1], color);
+        return;
     }
 
-    /* partly off the field, or a mixed-plane colour: edge by edge, with clipping */
+    /* a mixed-plane colour: edge by edge, with clipping */
     for (index = 0; index < count; ++index) {
         const int next = (index + 1 == count) ? 0 : index + 1;
         platform_draw_line(context, points[index * 2], points[index * 2 + 1], points[next * 2],

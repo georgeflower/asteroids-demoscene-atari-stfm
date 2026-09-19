@@ -35,7 +35,8 @@ static const uint16_t notes_extra_life[] = {239, 190, 159, 119, 159, 119, 95, 80
 static const uint16_t notes_game_over[] = {190, 213, 239, 284, 358, 426};
 static const uint16_t notes_wave_start[] = {190, 159};
 
-static const SfxDef def_shoot = {12, 70, 8, 0, 12, 1, NULL, 0};
+/* a soft pew: starts around 830 Hz and sweeps down to about 440 Hz while fading out */
+static const SfxDef def_shoot = {12, 150, 12, 0, 9, 1, NULL, 0};
 static const SfxDef def_explode_large = {32, 0, 0, 28, 15, 2, NULL, 0};
 static const SfxDef def_explode_medium = {22, 0, 0, 20, 14, 2, NULL, 0};
 static const SfxDef def_explode_small = {14, 0, 0, 12, 13, 1, NULL, 0};
