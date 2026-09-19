@@ -212,41 +212,95 @@ polydone:
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
-| Same outline, but given as a centre and byte offsets (the game's cached rock shapes), all known to
-| lie inside the screen.
-| void st_draw_poly_offsets(unsigned char *buf, long cx, long cy, const signed char *ox,
-|                           const signed char *oy, long count, long plane_offset)
-| count is at most 12.
-	.globl	_st_draw_poly_offsets
-_st_draw_poly_offsets:
-	link.w	%a6,#-48
-	movem.l	%d2-%d4/%a2-%a3,-(%sp)
-	move.l	12(%a6),%d0		| cx
-	move.l	16(%a6),%d1		| cy
-	move.l	20(%a6),%a0		| ox
-	move.l	24(%a6),%a1		| oy
-	move.l	28(%a6),%d2		| count
-	lea	-48(%a6),%a2
-	movea.l	%a2,%a3
-	move.w	%d2,%d3
-	subq.w	#1,%d3
-1:	move.b	(%a0)+,%d4
-	ext.w	%d4
-	add.w	%d0,%d4
-	move.w	%d4,(%a3)+
-	move.b	(%a1)+,%d4
-	ext.w	%d4
-	add.w	%d1,%d4
-	move.w	%d4,(%a3)+
-	dbra	%d3,1b
-	move.l	32(%a6),-(%sp)		| plane offset
-	move.l	%d2,-(%sp)		| count
-	move.l	%a2,-(%sp)		| points
-	move.l	8(%a6),-(%sp)		| buffer
-	jsr	_st_draw_poly_plane
-	lea	16(%sp),%sp
-	movem.l	(%sp)+,%d2-%d4/%a2-%a3
-	unlk	%a6
+| A rock outline from a prepared edge list (see build_rock_cache in platform_atari_st.c), all inside the screen.
+| void st_draw_rock(unsigned char *buf, long cx, long cy, const short *cache, long plane_offset)
+| cache: edges - 1 (-1 for none), x and y offset of the first corner, then per edge six words:
+|   |dx|, |dy|, half the steps, steps - 1 (movem loads them into d1, d2, d3, d7), 160 or -160 (row step),
+|   direction * 4 (0 x right, 1 x left, 2 y right, 3 y left).
+| Same Bresenham as st_draw_polyline; only the per-edge arithmetic has been done in advance.
+	.globl	_st_draw_rock
+_st_draw_rock:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	48(%sp),%a2
+	add.l	64(%sp),%a2		| a2 = buffer + plane offset
+	move.l	60(%sp),%a3		| a3 = cache
+	move.w	(%a3)+,%d5		| edges - 1
+	move.w	(%a3)+,%d3
+	add.w	54(%sp),%d3		| x of the first corner
+	move.w	(%a3)+,%d6
+	add.w	58(%sp),%d6		| y of the first corner
+	mulu.w	#160,%d6
+	lea	0(%a2,%d6.l),%a0
+	move.w	%d3,%d6
+	lsr.w	#4,%d6
+	lsl.w	#3,%d6
+	adda.w	%d6,%a0
+	moveq	#15,%d6
+	and.w	%d3,%d6
+	move.w	#0x8000,%d0
+	lsr.w	%d6,%d0			| pixel mask
+	or.w	%d0,(%a0)
+	tst.w	%d5
+	bmi.w	rockdone
+rockedge:
+	movem.w	(%a3)+,%d1-%d3/%d7	| |dx|, |dy|, half, steps - 1
+	movea.w	(%a3)+,%a1		| row step
+	move.w	(%a3)+,%d6		| direction * 4
+	jmp	rockjump(%pc,%d6.w)
+rockjump:
+	bra.w	rxright
+	bra.w	rxleft
+	bra.w	ryright
+	bra.w	ryleft
+rxright:
+	sub.w	%d2,%d3
+	bpl.s	1f
+	add.w	%d1,%d3
+	adda.w	%a1,%a0
+1:	ror.w	#1,%d0
+	bcc.s	2f
+	addq.l	#8,%a0
+2:	or.w	%d0,(%a0)
+	dbra	%d7,rxright
+	dbra	%d5,rockedge
+	bra.s	rockdone
+rxleft:
+	sub.w	%d2,%d3
+	bpl.s	3f
+	add.w	%d1,%d3
+	adda.w	%a1,%a0
+3:	rol.w	#1,%d0
+	bcc.s	4f
+	subq.l	#8,%a0
+4:	or.w	%d0,(%a0)
+	dbra	%d7,rxleft
+	dbra	%d5,rockedge
+	bra.s	rockdone
+ryright:
+	sub.w	%d1,%d3
+	bpl.s	5f
+	add.w	%d2,%d3
+	ror.w	#1,%d0
+	bcc.s	5f
+	addq.l	#8,%a0
+5:	adda.w	%a1,%a0
+	or.w	%d0,(%a0)
+	dbra	%d7,ryright
+	dbra	%d5,rockedge
+	bra.s	rockdone
+ryleft:
+	sub.w	%d1,%d3
+	bpl.s	6f
+	add.w	%d2,%d3
+	rol.w	#1,%d0
+	bcc.s	6f
+	subq.l	#8,%a0
+6:	adda.w	%a1,%a0
+	or.w	%d0,(%a0)
+	dbra	%d7,ryleft
+	dbra	%d5,rockedge
+rockdone:
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
 | Low-resolution 320x200, 4-plane line drawer.
@@ -342,6 +396,31 @@ _st_draw_line_low:
 9:	add.l	%a1,%a0
 	dbra	%d7,8b
 10:	movem.l	(%sp)+,%d2-%d7/%a2
+	rts
+
+| Two neighbouring pixels (x, y) and (x + 1, y) in one bitplane: what a bullet is. Both must be on the screen.
+| void st_draw_pair(unsigned char *buf, long x, long y, long plane_offset)
+	.globl	_st_draw_pair
+_st_draw_pair:
+	move.l	8(%sp),%d0		| x
+	move.l	12(%sp),%d1		| y
+	move.l	4(%sp),%a0
+	add.l	16(%sp),%a0		| + plane offset
+	mulu.w	#160,%d1
+	adda.l	%d1,%a0
+	move.w	%d0,%d1
+	lsr.w	#4,%d1
+	lsl.w	#3,%d1
+	adda.w	%d1,%a0			| the 16-pixel group of x
+	and.w	#15,%d0
+	cmp.w	#15,%d0
+	beq.s	1f
+	move.w	#0xc000,%d1
+	lsr.w	%d0,%d1
+	or.w	%d1,(%a0)
+	rts
+1:	or.w	#1,(%a0)		| the last pixel of this group ...
+	or.w	#0x8000,8(%a0)		| ... and the first of the next
 	rts
 
 | Single-bitplane line: a two-point polyline.

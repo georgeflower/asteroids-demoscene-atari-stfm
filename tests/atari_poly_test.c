@@ -83,8 +83,11 @@ static void draw_edges(const int16_t *points, int count, uint8_t color, const in
 
 static void draw_offsets(const int16_t *points, int count, uint8_t color, const int8_t *ox, const int8_t *oy, int cx,
                          int cy) {
+    static uint16_t cache[GAME_DRAW_CACHE_WORDS];
+    uint8_t valid = 0;
+
     (void) points;
-    platform_draw_polygon_offsets(NULL, cx, cy, ox, oy, count, color);
+    platform_draw_polygon_offsets(NULL, cx, cy, ox, oy, count, color, cache, &valid);
 }
 
 static long muldiv16(long a, long b, long c) {

@@ -14,7 +14,7 @@
 #ifndef PROF_WAVE
 #define PROF_WAVE 4
 #endif
-#ifdef PROF_RENDER_ONLY
+#if defined(PROF_RENDER_ONLY) || defined(PROF_STEP_ONLY)
 #define FRAMES 2500
 #else
 #define FRAMES 400
@@ -27,13 +27,14 @@ extern uint32_t *prof_end;
 
 static uint32_t samples[MAX_SAMPLES];
 
+#define ST_FRCLOCK (*(volatile uint32_t *) 0x466UL)
 #define MFP_IERA (*(volatile uint8_t *) 0xfffa07UL)
 #define MFP_IMRA (*(volatile uint8_t *) 0xfffa13UL)
 #define MFP_TACR (*(volatile uint8_t *) 0xfffa19UL)
 #define MFP_TADR (*(volatile uint8_t *) 0xfffa1fUL)
 #define VECTOR_TIMER_A (*(volatile uint32_t *) 0x134UL)
 
-#ifdef PROF_RENDER_ONLY
+#if defined(PROF_RENDER_ONLY)
 static void null_line(void *c, int a, int b, int d, int e, uint8_t f) { (void) c; (void) a; (void) b; (void) d; (void) e; (void) f; }
 #endif
 
@@ -43,6 +44,8 @@ int main(void) {
     GameInput input;
     int frame;
     uint32_t count;
+    uint32_t buckets[5] = {0, 0, 0, 0, 0};
+    uint32_t last_clock;
     FILE *file;
     static const char path[] = {'C', ':', 92, 'P', 'R', 'O', 'F', '.', 'B', 'I', 'N', 0};
 
@@ -80,7 +83,21 @@ int main(void) {
     MFP_IMRA |= 0x20;
     MFP_TACR = 3;   /* divide by 16: 153600 / 15 = 10240 Hz */
 
-#ifdef PROF_RENDER_ONLY
+#ifdef PROF_STEP_ONLY
+    memset(state.asteroids, 0, sizeof(state.asteroids));
+    state.asteroids[0].active = 1;
+    state.asteroids[0].size = GAME_ASTEROID_SMALL;
+    state.asteroids[0].point_count = 8;
+    for (frame = 0; frame < FRAMES; ++frame) {
+        state.ship.invulnerability = 255;
+        state.asteroids[0].x = 5L << GAME_FIX_SHIFT;
+        state.asteroids[0].y = 5L << GAME_FIX_SHIFT;
+        input.left = (uint8_t) ((frame / 40) & 1);
+        input.thrust = (uint8_t) ((frame / 25) & 1);
+        input.fire = (uint8_t) ((frame / 6) & 1);
+        game_step(&state, &input);
+    }
+#elif defined(PROF_RENDER_ONLY)
     /* one parked rock and nothing else, rendering only, with the drawing calls stubbed out */
     memset(state.asteroids, 0, sizeof(state.asteroids));
     state.asteroids[0].active = 1;
@@ -99,6 +116,7 @@ int main(void) {
         game_render(&state, &renderer);
     }
 #else
+    last_clock = ST_FRCLOCK;
     for (frame = 0; frame < FRAMES; ++frame) {
         state.ship.invulnerability = 255;
         input.left = (uint8_t) ((frame / 40) & 1);
@@ -110,9 +128,17 @@ int main(void) {
         platform_begin_frame();
         game_render(&state, &renderer);
         platform_end_frame();
+        {
+            const uint32_t now = ST_FRCLOCK;
+            uint32_t taken = now - last_clock;
+
+            last_clock = now;
+            ++buckets[taken > 4 ? 4 : taken];
+        }
     }
 #endif
 
+    (void) last_clock;
     MFP_TACR = 0;
     MFP_IMRA &= (uint8_t) ~0x20;
     MFP_IERA &= (uint8_t) ~0x20;
@@ -127,6 +153,17 @@ int main(void) {
         fwrite(header, sizeof(header), 1, file);
         fwrite(samples, sizeof(uint32_t), count, file);
         fclose(file);
+    }
+    {
+        static const char log_path[] = {'C', ':', 92, 'P', 'R', 'O', 'F', '.', 'L', 'O', 'G', 0};
+        FILE *log = fopen(log_path, "w");
+
+        if (log != NULL) {
+            fprintf(log, "wave %d: frames taking 1,2,3,4+ vblanks: %lu %lu %lu %lu", PROF_WAVE, (unsigned long) buckets[1],
+                    (unsigned long) buckets[2], (unsigned long) buckets[3], (unsigned long) buckets[4]);
+            fputc(10, log);
+            fclose(log);
+        }
     }
     platform_shutdown();
     return 0;

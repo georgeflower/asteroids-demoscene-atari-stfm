@@ -1211,6 +1211,14 @@ static uint8_t any_enemies(const GameState *state) {
 static void resolve_bullets_vs_enemies(GameState *state) {
     int bullet_index;
     int enemy_index;
+    int enemies_in_play = 0;
+
+    for (enemy_index = 0; enemy_index < GAME_MAX_ENEMIES; ++enemy_index) {
+        enemies_in_play |= state->enemies[enemy_index].active;
+    }
+    if (!enemies_in_play && !state->boss.active) {
+        return;
+    }
 
     for (bullet_index = 0; bullet_index < GAME_MAX_BULLETS; ++bullet_index) {
         GameBullet *bullet = &state->bullets[bullet_index];
@@ -1274,20 +1282,37 @@ static void resolve_enemy_threats(GameState *state) {
     }
 }
 
+/* The indices of the rocks in play, so the bullet loops do not step over dozens of empty slots. */
+static int collect_active_asteroids(const GameState *state, uint8_t *list) {
+    int count = 0;
+    int index;
+
+    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
+        if (state->asteroids[index].active) {
+            list[count++] = (uint8_t) index;
+        }
+    }
+    return count;
+}
+
 static void resolve_bullet_collisions(GameState *state) {
+    uint8_t active[GAME_MAX_ASTEROIDS];
+    int active_count = -1;   /* collected when the first bullet turns up */
     int bullet_index;
-    int asteroid_index;
+    int list_index;
 
     for (bullet_index = 0; bullet_index < GAME_MAX_BULLETS; ++bullet_index) {
         GameBullet *bullet = &state->bullets[bullet_index];
+
         if (!bullet->active) {
             continue;
         }
-        for (asteroid_index = 0; asteroid_index < GAME_MAX_ASTEROIDS; ++asteroid_index) {
-            GameAsteroid *asteroid = &state->asteroids[asteroid_index];
-            if (!asteroid->active) {
-                continue;
-            }
+        if (active_count < 0) {
+            active_count = collect_active_asteroids(state, active);
+        }
+        for (list_index = 0; list_index < active_count; ++list_index) {
+            GameAsteroid *asteroid = &state->asteroids[active[list_index]];
+
             if (within_radius(bullet->x, bullet->y, asteroid->x, asteroid->y,
                               asteroid_radius_table[asteroid->size] + BULLET_RADIUS)) {
                 GameAsteroid exploded = *asteroid;
@@ -1298,6 +1323,7 @@ static void resolve_bullet_collisions(GameState *state) {
                             exploded.size == GAME_ASTEROID_MEDIUM ? SFX_EXPLODE_MEDIUM : SFX_EXPLODE_SMALL);
                 split_asteroid(state, &exploded);
                 maybe_drop_powerup(state, exploded.x, exploded.y);
+                active_count = collect_active_asteroids(state, active);   /* the rock went, its pieces came */
                 break;
             }
         }
@@ -1734,8 +1760,16 @@ static void draw_bullets(const GameState *state, const GameRenderer *renderer) {
 }
 
 /* Rocks turn in 64 steps (5.6 degrees), so the rotated vertex offsets are cached and reused for several frames. */
+/* Small and medium rocks are only a few pixels across, so extra vertices add drawing cost but no visible detail:
+   they are drawn with 6 and 8 corners, taking evenly spaced ones of their 8-11 radii. */
+static const uint8_t pick_small[4][6] = {{0, 1, 3, 4, 6, 7}, {0, 1, 3, 5, 6, 8}, {0, 2, 3, 5, 7, 8}, {0, 2, 4, 5, 7, 9}};
+static const uint8_t pick_medium[4][8] = {{0, 1, 2, 3, 4, 5, 6, 7}, {0, 1, 2, 4, 5, 6, 7, 8}, {0, 1, 3, 4, 5, 7, 8, 9},
+                                          {0, 1, 3, 4, 6, 7, 8, 10}};
+
 static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroid, uint8_t orientation) {
-    const uint16_t step = asteroid_angle_step[asteroid->point_count - 8];
+    const uint8_t *pick = NULL;
+    int draw_count = asteroid->point_count;
+    uint16_t step;
     uint16_t angle = (uint16_t) ((uint16_t) orientation << 10);
     int min_x = 0;
     int min_y = 0;
@@ -1743,8 +1777,20 @@ static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroi
     int max_y = 0;
     int vertex;
 
-    for (vertex = 0; vertex < asteroid->point_count; ++vertex) {
-        const int16_t radius = asteroid->radius[vertex];
+    if (asteroid->size == GAME_ASTEROID_SMALL) {
+        pick = pick_small[asteroid->point_count - 8];
+        draw_count = 6;
+        step = 10922;   /* 65536 / 6 */
+    } else if (asteroid->size == GAME_ASTEROID_MEDIUM && asteroid->point_count > 8) {
+        pick = pick_medium[asteroid->point_count - 8];
+        draw_count = 8;
+        step = 8192;
+    } else {
+        step = asteroid_angle_step[asteroid->point_count - 8];
+    }
+
+    for (vertex = 0; vertex < draw_count; ++vertex) {
+        const int16_t radius = asteroid->radius[pick != NULL ? pick[vertex] : vertex];
         const int world_x = (int) ((mul16(radius, (int16_t) trig_cos(angle)) + 8192) >> 14);
         const int world_y = (int) ((mul16(radius, (int16_t) trig_sin(angle)) + 8192) >> 14);
         const int offset_x = scale_x(state, world_x);
@@ -1759,6 +1805,8 @@ static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroi
     asteroid->bound_y0 = (int8_t) min_y;
     asteroid->bound_x1 = (int8_t) max_x;
     asteroid->bound_y1 = (int8_t) max_y;
+    asteroid->draw_count = (uint8_t) draw_count;
+    asteroid->draw_cache_valid = 0;
     asteroid->cache_index = orientation;
     asteroid->cache_valid = 1;
 }
@@ -1766,21 +1814,23 @@ static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroi
 static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, const GameRenderer *renderer) {
     const int center_x = screen_x(state, asteroid->x);
     const int center_y = screen_y(state, asteroid->y);
-    const int count = asteroid->point_count;
     const uint8_t orientation = (uint8_t) (asteroid->angle >> 10);
     int16_t points[GAME_MAX_ASTEROID_POINTS * 2];
+    int count;
     int vertex;
 
     if (!asteroid->cache_valid || asteroid->cache_index != orientation) {
         rebuild_asteroid_cache(state, asteroid, orientation);
     }
+    count = asteroid->draw_count;
 
     if (renderer->polygon_offsets != NULL && center_x + asteroid->bound_x0 >= (int) state->field_x &&
         center_x + asteroid->bound_x1 < (int) (state->field_x + state->field_width) &&
         center_y + asteroid->bound_y0 >= (int) state->field_y &&
         center_y + asteroid->bound_y1 < (int) (state->field_y + state->field_height)) {
         renderer->polygon_offsets(renderer->context, center_x, center_y, asteroid->off_x, asteroid->off_y, count,
-                                  asteroid_color_table[asteroid->size]);
+                                  asteroid_color_table[asteroid->size], asteroid->draw_cache,
+                                  &asteroid->draw_cache_valid);
     } else {
         for (vertex = 0; vertex < count; ++vertex) {
             points[vertex * 2] = (int16_t) (center_x + asteroid->off_x[vertex]);
@@ -2105,13 +2155,28 @@ static void draw_boss(const GameState *state, const GameBoss *boss, const GameRe
 
 /* ---- text screens ---- */
 
+/* Decimal digits by repeated subtraction: the 68000 has no 32-bit divide, so value / 10 is a slow library call.
+   Shows the low `digits` digits (up to 6) of the value, like value % 10^digits would. */
 static void format_number(char *out, uint32_t value, int digits) {
+    static const uint32_t powers[7] = {1, 10, 100, 1000, 10000, 100000, 1000000};
     int index;
 
+    if (digits > 6) {
+        digits = 6;
+    }
+    if (value >= powers[digits]) {
+        value %= powers[digits];
+    }
     out[digits] = 0;
-    for (index = digits - 1; index >= 0; --index) {
-        out[index] = (char) ('0' + (value % 10u));
-        value /= 10u;
+    for (index = 0; index < digits; ++index) {
+        const uint32_t power = powers[digits - 1 - index];
+        char digit = '0';
+
+        while (value >= power) {
+            value -= power;
+            ++digit;
+        }
+        out[index] = digit;
     }
 }
 

@@ -43,7 +43,10 @@ static void null_polygon(void *context, const int16_t *points, int count, uint8_
     ++lines_seen;
 }
 
-static void null_offsets(void *context, int cx, int cy, const int8_t *ox, const int8_t *oy, int count, uint8_t color) {
+static void null_offsets(void *context, int cx, int cy, const int8_t *ox, const int8_t *oy, int count, uint8_t color,
+                         void *cache, uint8_t *cache_valid) {
+    (void) cache;
+    (void) cache_valid;
     (void) context;
     (void) cx;
     (void) cy;
@@ -115,8 +118,37 @@ static int count_rocks(const GameState *state) {
     return rocks;
 }
 
+/* Rock populations: how many large, medium and small rocks. The first is a fresh early wave, the second what
+   a level 4 looks like a while in, the third a crowded late one, the last twelve large ones (the worst case). */
+static const int scenarios[4][3] = {{6, 0, 0}, {4, 8, 12}, {6, 10, 24}, {12, 0, 0}};
+static uint32_t lcg = 777;
+
+static int lcg_below(int limit) {
+    lcg = lcg * 1103515245ul + 12345ul;
+    return (int) (((lcg >> 16) & 0x7fffu) % (unsigned) limit);
+}
+
+/* Turn the rock in slot `slot` into one of the given size at a random place (radii scaled from the large ones). */
+static void make_rock(GameState *state, int slot, int size, const GameAsteroid *model) {
+    static const int radius_scale[4] = {0, 5, 10, 16};
+    GameAsteroid *rock = &state->asteroids[slot];
+    int index;
+
+    *rock = *model;
+    rock->size = (uint8_t) size;
+    rock->x = (int32_t) (30 + lcg_below(260)) << GAME_FIX_SHIFT;
+    rock->y = (int32_t) (30 + lcg_below(180)) << GAME_FIX_SHIFT;
+    rock->vx = (int32_t) (lcg_below(60000) - 30000);
+    rock->vy = (int32_t) (lcg_below(60000) - 30000);
+    rock->angle = (uint16_t) lcg_below(65535);
+    rock->spin = (int16_t) (lcg_below(500) - 250);
+    for (index = 0; index < rock->point_count; ++index) {
+        rock->radius[index] = (uint8_t) ((model->radius[index] * radius_scale[size]) / 16);
+    }
+    rock->cache_valid = 0;
+}
+
 int main(void) {
-    static const int waves[4] = {1, 2, 4, 8};
         GameState state;
     uint32_t ticks[4][MODE_COUNT];
     int rocks[4];
@@ -132,10 +164,26 @@ int main(void) {
         game_init(&state, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
         game_start(&state);
         memset(state.asteroids, 0, sizeof(state.asteroids));
-        state.wave = (uint8_t) (waves[wave_index] - 1);
+        state.wave = 0;
         state.ship.invulnerability = 255;
         game_step(&state, &(GameInput) {0, 0, 0, 0, 0, 0, 0, 0});
         state.banner_timer = 0;
+        {
+            /* a fresh wave gives large rocks; keep the first as a model and rebuild the population from it */
+            const GameAsteroid model = state.asteroids[0];
+            int slot = 0;
+            int size;
+            int made;
+
+            memset(state.asteroids, 0, sizeof(state.asteroids));
+            for (size = GAME_ASTEROID_LARGE; size >= GAME_ASTEROID_SMALL; --size) {
+                for (made = 0; made < scenarios[wave_index][GAME_ASTEROID_LARGE - size] && slot < GAME_MAX_ASTEROIDS; ++made) {
+                    make_rock(&state, slot++, size, &model);
+                }
+            }
+            state.ufo_timer = 30000;
+            state.alien_timer = 30000;
+        }
         rocks[wave_index] = count_rocks(&state);
         for (mode = 0; mode < MODE_COUNT; ++mode) {
             ticks[wave_index][mode] = run(&state, mode);
@@ -164,7 +212,8 @@ int main(void) {
 
     printf("ms per frame:\n step maths +dirty +erase draw ALL\n");
     for (wave_index = 0; wave_index < 4; ++wave_index) {
-        printf("wave %d (%d rocks):\n", waves[wave_index], rocks[wave_index]);
+        printf("%dL %dM %dS (%d rocks):\n", scenarios[wave_index][0], scenarios[wave_index][1],
+               scenarios[wave_index][2], rocks[wave_index]);
         for (mode = 0; mode < MODE_COUNT; ++mode) {
             /* 200 Hz ticks: ms per frame = ticks * 5 / frames, shown with one decimal */
             const unsigned long tenths = (unsigned long) (ticks[wave_index][mode] * 50 / BENCH_FRAMES);

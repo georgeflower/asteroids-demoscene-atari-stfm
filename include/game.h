@@ -17,6 +17,7 @@
 #define GAME_MAX_ASTEROIDS 40
 #define GAME_MAX_BULLETS 12
 #define GAME_MAX_ASTEROID_POINTS 11
+#define GAME_DRAW_CACHE_WORDS (3 + 6 * GAME_MAX_ASTEROID_POINTS)   /* room the platform may use per rock */
 #define GAME_MAX_POWERUPS 4
 #define GAME_MAX_ENEMIES 12
 #define GAME_MAX_ENEMY_BULLETS 16
@@ -120,6 +121,9 @@ typedef struct GameAsteroid {
     int8_t bound_y1;
     uint8_t cache_index;
     uint8_t cache_valid;
+    uint8_t draw_count;  /* vertices of the cached outline (small rocks are drawn with fewer) */
+    uint8_t draw_cache_valid;                       /* the platform's own prepared form of the outline, below */
+    uint16_t draw_cache[GAME_DRAW_CACHE_WORDS];
 } GameAsteroid;
 
 enum {
@@ -279,9 +283,12 @@ typedef void (*GameLineDrawer)(void *context, int x0, int y0, int x1, int y1, ui
 typedef void (*GamePolygonDrawer)(void *context, const int16_t *points, int count, uint8_t color);
 
 /* Optional, a faster route for the rocks: a closed outline given as a centre and signed byte offsets, which
-   the game only uses when the whole outline lies inside the playing field. */
+   the game only uses when the whole outline lies inside the playing field. cache is scratch space owned by
+   the rock, for whatever the drawer can prepare once per outline; the game clears *cache_valid whenever the
+   outline changes and the drawer sets it after filling the cache. */
 typedef void (*GameOffsetPolygonDrawer)(void *context, int center_x, int center_y, const int8_t *off_x,
-                                        const int8_t *off_y, int count, uint8_t color);
+                                        const int8_t *off_y, int count, uint8_t color, void *cache,
+                                        uint8_t *cache_valid);
 
 /* Optional: called with the screen-space bounding box of everything game_render() draws
    on the playing field, so the platform can erase just those areas next time. */

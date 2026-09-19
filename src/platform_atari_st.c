@@ -34,10 +34,11 @@
 
 extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
+extern void st_draw_pair(unsigned char *buffer, long x, long y, long plane_offset);
 extern void st_draw_polyline(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
-extern void st_draw_poly_offsets(unsigned char *buffer, long cx, long cy, const signed char *off_x, const signed char *off_y, long count, long plane_offset);
+extern void st_draw_rock(unsigned char *buffer, long cx, long cy, const short *cache, long plane_offset);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 extern void st_ikbd_install(void);
 extern void st_ikbd_remove(void);
@@ -356,7 +357,9 @@ static int clip_line(long *x0, long *y0, long *x1, long *y1) {
 }
 
 static int inside_field(int x, int y) {
-    return x >= FIELD_X0 && x <= FIELD_X1 && y >= FIELD_Y0 && y <= FIELD_Y1;
+    /* one unsigned compare per axis instead of two signed ones */
+    return (uint16_t) (x - FIELD_X0) <= (uint16_t) (FIELD_X1 - FIELD_X0) &&
+           (uint16_t) (y - FIELD_Y0) <= (uint16_t) (FIELD_Y1 - FIELD_Y0);
 }
 
 static long plane_offset_for(uint8_t color) {
@@ -378,18 +381,56 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
     }
 
     if (color == 1 || color == 2 || color == 4 || color == 8) {
-        st_draw_line_plane(draw_buffer, cx0, cy0, cx1, cy1, plane_offset_for(color));
+        if (cy1 == cy0 && cx1 == cx0 + 1) {
+            st_draw_pair(draw_buffer, cx0, cy0, plane_offset_for(color));   /* a bullet */
+        } else {
+            st_draw_line_plane(draw_buffer, cx0, cy0, cx1, cy1, plane_offset_for(color));
+        }
     } else {
         st_draw_line_low(draw_buffer, cx0, cy0, cx1, cy1, color);
     }
 }
 
+/* Work out, once per outline, what st_draw_rock needs for every edge (see st_video.S for the layout). */
+static void build_rock_cache(int16_t *cache, const int8_t *off_x, const int8_t *off_y, int count) {
+    int16_t *out = cache + 3;
+    int edges = 0;
+    int index;
+
+    cache[1] = off_x[0];
+    cache[2] = off_y[0];
+    for (index = 0; index < count; ++index) {
+        const int next = (index + 1 == count) ? 0 : index + 1;
+        const int dx = off_x[next] - off_x[index];
+        const int dy = off_y[next] - off_y[index];
+        const int adx = dx < 0 ? -dx : dx;
+        const int ady = dy < 0 ? -dy : dy;
+        const int major = adx >= ady ? adx : ady;
+
+        if (major == 0) {
+            continue;
+        }
+        out[0] = (int16_t) adx;
+        out[1] = (int16_t) ady;
+        out[2] = (int16_t) (major >> 1);
+        out[3] = (int16_t) (major - 1);
+        out[4] = (int16_t) (dy < 0 ? -160 : 160);
+        out[5] = (int16_t) (((adx >= ady) ? 0 : 2 * 4) + (dx < 0 ? 4 : 0));
+        out += 6;
+        ++edges;
+    }
+    cache[0] = (int16_t) (edges - 1);
+}
+
 /* colour must be one of 1, 2, 4, 8 and the outline must lie inside the field */
 void platform_draw_polygon_offsets(void *context, int center_x, int center_y, const int8_t *off_x,
-                                   const int8_t *off_y, int count, uint8_t color) {
+                                   const int8_t *off_y, int count, uint8_t color, void *cache, uint8_t *cache_valid) {
     (void) context;
-    st_draw_poly_offsets(draw_buffer, center_x, center_y, (const signed char *) off_x, (const signed char *) off_y,
-                         count, plane_offset_for(color));
+    if (!*cache_valid) {
+        build_rock_cache((int16_t *) cache, off_x, off_y, count);
+        *cache_valid = 1;
+    }
+    st_draw_rock(draw_buffer, center_x, center_y, (const short *) cache, plane_offset_for(color));
 }
 
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color) {

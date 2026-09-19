@@ -13,7 +13,6 @@
 
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
-extern void st_draw_poly_offsets(unsigned char *buffer, long cx, long cy, const signed char *ox, const signed char *oy, long count, long plane_offset);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 
 static unsigned char buffer[32000 + 4];
@@ -65,7 +64,7 @@ static int perimeter(const int16_t *p, int n) {
 
 static void c_line(void *c, int a, int b, int d, int e, uint8_t f) { ++n_line; px_line += (d > a ? d - a : a - d) > (e > b ? e - b : b - e) ? (d > a ? d - a : a - d) : (e > b ? e - b : b - e); platform_draw_line(c, a, b, d, e, f); }
 static void c_poly(void *c, const int16_t *p, int n, uint8_t f) { ++n_poly; px_poly += perimeter(p, n); platform_draw_polygon(c, p, n, f); }
-static void c_offs(void *c, int x, int y, const int8_t *a, const int8_t *b, int n, uint8_t f) { int16_t q[24]; int k; for (k = 0; k < n; ++k) { q[k * 2] = a[k]; q[k * 2 + 1] = b[k]; } ++n_offs; px_offs += perimeter(q, n); platform_draw_polygon_offsets(c, x, y, a, b, n, f); }
+static void c_offs(void *c, int x, int y, const int8_t *a, const int8_t *b, int n, uint8_t f, void *cache, uint8_t *valid) { int16_t q[24]; int k; for (k = 0; k < n; ++k) { q[k * 2] = a[k]; q[k * 2 + 1] = b[k]; } ++n_offs; px_offs += perimeter(q, n); platform_draw_polygon_offsets(c, x, y, a, b, n, f, cache, valid); }
 static void c_dirty(void *c, int a, int b, int d, int e) { ++n_dirty; platform_mark_dirty(c, a, b, d, e); }
 static void c_text(void *c, int x, int y, const char *t, uint8_t f, uint8_t g, uint8_t s) { ++n_text; platform_draw_text(c, x, y, t, f, g, s); }
 static void c_points(void *c, const int16_t *p, int n, uint8_t f) { ++n_points; n_point_px += n; platform_draw_points(c, p, n, f); }
@@ -214,11 +213,14 @@ int main(void) {
             ox[v] = (signed char) (rock[v * 2] - 160);
             oy[v] = (signed char) (rock[v * 2 + 1] - 100);
         }
+        static uint16_t cache[GAME_DRAW_CACHE_WORDS];
+        uint8_t valid = 0;
+
         start = ST_HZ200;
         for (i = 0; i < N; ++i) {
-            st_draw_poly_offsets(base, 160, 100, ox, oy, 11, 2);
+            platform_draw_polygon_offsets(NULL, 160, 100, ox, oy, 11, 2, cache, &valid);
         }
-        report("asm polygon from offsets", ST_HZ200 - start, N, pixels);
+        report("rock from cached edges", ST_HZ200 - start, N, pixels);
     }
 
     start = ST_HZ200;

@@ -84,7 +84,10 @@ Because the target is a 68000, the tests also run *as Atari programs* inside Hat
 ```sh
 make test-atari         # build/GAMETEST.PRG: game logic (waves, scoring, physics, hyperspace, high scores, screens, dirty rectangles)
 make test-gfx-atari     # build/GFXTEST.PRG: assembly drawing routines and the text drawer compared pixel for pixel with references
-make bench-atari        # build/GAMEBENCH.PRG: milliseconds per frame for several wave sizes
+make test-poly-atari    # build/POLYTEST.PRG: polygons partly outside the field and cached rock outlines compared with edge-by-edge drawing (C:\POLYTEST.LOG)
+make bench-atari        # build/GAMEBENCH.PRG: milliseconds per frame for several rock populations, split into step / render maths / erase / draw
+make micro-atari        # build/MICRO.PRG: cycles per call of the drawing primitives and the fixed cost of a frame (C:\MICRO.LOG)
+make prof-atari WAVE=4  # build/PROF.PRG: sampling profiler (about 10 kHz PC samples in Hatari) writing C:\PROF.BIN; turn it into a table with tools/prof_report.py
 make screens-atari      # build/SCREENS.PRG: scripted walk through the banner, pause, power-ups, game over, initials and title screens
 make enemies-atari      # build/ENEMIES.PRG: line-up of every enemy, then each boss
 make test-sound-atari   # build/SNDTEST.PRG: plays effects and reads the YM2149 registers back from the emulated chip (C:\\SNDTEST.LOG)
@@ -93,15 +96,18 @@ make test-keys-atari    # build/KEYTEST.PRG: logs which keys reach the game (C:\
 
 `make test` builds the game-logic tests for the host machine instead, if you have a host C compiler.
 
-Performance measured in Hatari (cycle-exact 8 MHz ST, TOS 1.04), full game step + erase + render, ms per frame (20 ms = 50 fps):
+Performance measured in Hatari (cycle-exact 8 MHz ST, TOS 1.04) with `make bench-atari`: full game step + erase + render, ms per frame (20 ms = 50 fps, 40 ms = 25 fps). Rocks are placed at random with the given mix of large / medium / small:
 
-| wave | rocks | ms/frame |
-|---|---|---|
-| 1 | 6 | 18 |
-| 4 | 12 | 35 |
-| 8 | 20 | 52 |
+| rocks | ms/frame |
+|---|---|
+| 6 large (start of a game) | 17 |
+| 12 large (worst case for size) | 28 (was 36) |
+| 4 large, 8 medium, 12 small (a level 4 a while in) | 34 |
+| 6 large, 10 medium, 24 small (crowded, 40 rocks) | 53 |
 
-Higher waves drop below 50 fps; the game keeps its speed by stepping once per elapsed blank.
+The frame is drawn once per two blanks whenever it takes more than 20 ms, so the early waves run at 50 fps, busier ones at 25 fps and the very crowded ones at 17 fps; the game keeps its speed by stepping once per elapsed blank. What the time goes to (from the profiler): drawing the rock outlines (about 45 %), erasing the old ones, the per-rock render maths and dirty rectangles, and the game step.
+
+Speed-ups so far: a polygon drawer that carries on from the previous edge instead of setting each edge up again; rocks prepared once per orientation (edge list in `GameAsteroid.draw_cache`, drawn by `st_draw_rock`); border clipping with `muls`/`divs` instead of the 32-bit library divide; two-pixel bullets drawn by a dedicated routine; small and medium rocks drawn with 6 and 8 corners; the HUD redrawn field by field (and its digits without divisions); collision loops that only visit the rocks in play.
 
 ## Running on real hardware
 

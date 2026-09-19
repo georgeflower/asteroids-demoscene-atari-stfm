@@ -2543,12 +2543,16 @@ static void test_boss_hit_flash_and_sound(void) {
 }
 
 static int offset_calls;
+static int offset_cache_hits;
 
 static void capture_offsets(void *context, int center_x, int center_y, const int8_t *off_x, const int8_t *off_y,
-                            int count, uint8_t color) {
+                            int count, uint8_t color, void *cache, uint8_t *cache_valid) {
     int index;
 
+    (void) cache;
     ++offset_calls;
+    offset_cache_hits += *cache_valid;
+    *cache_valid = 1;   /* as a drawer would after preparing its cache */
     for (index = 0; index < count; ++index) {
         const int next = (index + 1 == count) ? 0 : index + 1;
 
@@ -2589,12 +2593,21 @@ static void test_rock_offset_route(void) {
         state.screen_refresh = 0;
         renderer.polygon_offsets = capture_offsets;
         offset_calls = 0;
+        offset_cache_hits = 0;
         reset_capture();
         game_render(&state, &renderer);
+        CHECK(offset_cache_hits == 0);   /* a rebuilt outline starts with an empty drawer cache */
         CHECK(line_count == count_a);
         CHECK(memcmp(lines, lines_a, sizeof(int) * 4 * (size_t) count_a) == 0);
         /* the parked small rock lies inside the field; the big one only takes the offsets route away from the edge */
         CHECK(offset_calls == (at_edge ? 1 : 2));
+
+        /* drawing the same outline again reuses what the drawer prepared */
+        offset_calls = 0;
+        offset_cache_hits = 0;
+        reset_capture();
+        game_render(&state, &renderer);
+        CHECK(offset_calls > 0 && offset_cache_hits == offset_calls);
     }
 }
 
