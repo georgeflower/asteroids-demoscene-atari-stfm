@@ -8,17 +8,26 @@
 
 #define SCREEN_BYTES 32000
 #define ST_PALETTE_COLORS 16
+#define IKBD_DEVICE 4
 
-static unsigned char screen_storage[SCREEN_BYTES + 255];
-static unsigned char *screen_base;
-static long original_physbase;
-static long original_logbase;
+extern void st_clear_buffer(unsigned char *buffer);
+extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
+
+static unsigned char screen_storage[2][SCREEN_BYTES + 255];
+static unsigned char *screen_pages[2];
+static unsigned char *draw_buffer;
+static unsigned char *show_buffer;
+static void *original_physbase;
+static void *original_logbase;
 static int original_resolution;
 static short original_palette[ST_PALETTE_COLORS];
 static PlatformConfig current_config;
+static unsigned char key_state[128];
+static unsigned char ikbd_packet_remaining;
+static unsigned char previous_toggle_state;
 
-static unsigned char *aligned_screen(void) {
-    unsigned long address = (unsigned long) screen_storage;
+static unsigned char *aligned_screen(int index) {
+    unsigned long address = (unsigned long) screen_storage[index];
     address = (address + 255u) & ~255u;
     return (unsigned char *) address;
 }
@@ -41,7 +50,34 @@ static void set_palette(const PlatformConfig *config) {
 }
 
 static void clear_screen(void) {
-    memset(screen_base, 0, SCREEN_BYTES);
+    st_clear_buffer(draw_buffer);
+}
+
+static void clear_all_screens(void) {
+    st_clear_buffer(screen_pages[0]);
+    st_clear_buffer(screen_pages[1]);
+}
+
+static void update_key_state(unsigned char code) {
+    if (ikbd_packet_remaining > 0) {
+        --ikbd_packet_remaining;
+        return;
+    }
+
+    if (code >= 0xf6u) {
+        if (code <= 0xf7u) {
+            ikbd_packet_remaining = 5;
+        } else if (code <= 0xfbu) {
+            ikbd_packet_remaining = 2;
+        } else if (code <= 0xfdu) {
+            ikbd_packet_remaining = 6;
+        } else {
+            ikbd_packet_remaining = 1;
+        }
+        return;
+    }
+
+    key_state[code & 0x7fu] = (unsigned char) ((code & 0x80u) == 0);
 }
 
 static void plot_pixel(int x, int y, uint8_t color) {
@@ -50,7 +86,7 @@ static void plot_pixel(int x, int y, uint8_t color) {
     const int group_offset = (x >> 4) * words_per_group * 2;
     const int bit = 15 - (x & 15);
     unsigned short mask = (unsigned short) (1u << bit);
-    unsigned short *words = (unsigned short *) (screen_base + row_offset + group_offset);
+    unsigned short *words = (unsigned short *) (draw_buffer + row_offset + group_offset);
     int plane_count = (current_config.resolution == PLATFORM_RES_MEDIUM) ? 2 : 4;
     int plane;
 
@@ -73,11 +109,17 @@ int platform_init(const PlatformConfig *config) {
         original_palette[i] = Setcolor(i, -1);
     }
 
-    screen_base = aligned_screen();
+    screen_pages[0] = aligned_screen(0);
+    screen_pages[1] = aligned_screen(1);
+    show_buffer = screen_pages[0];
+    draw_buffer = screen_pages[1];
     current_config = *config;
-    Setscreen((void *) screen_base, (void *) screen_base, config->resolution);
+    memset(key_state, 0, sizeof(key_state));
+    ikbd_packet_remaining = 0;
+    previous_toggle_state = 0;
+    clear_all_screens();
+    Setscreen((void *) show_buffer, (void *) show_buffer, config->resolution);
     set_palette(config);
-    clear_screen();
     return 1;
 }
 
@@ -86,67 +128,27 @@ void platform_shutdown(void) {
 
     Setscreen((void *) original_logbase, (void *) original_physbase, original_resolution);
     for (i = 0; i < ST_PALETTE_COLORS; ++i) {
-        Setcolor(i, original_palette[i]);
+        (void) Setcolor(i, original_palette[i]);
     }
 }
 
 void platform_poll_input(GameInput *input) {
     memset(input, 0, sizeof(*input));
 
-    while (Cconis()) {
-        const long raw = Crawcin();
-        const int ascii = (int) (raw & 0xffL);
-        const int scan = (int) ((raw >> 16) & 0xffL);
-
-        switch (ascii) {
-            case 'a':
-            case 'A':
-                input->left = 1;
-                break;
-            case 'd':
-            case 'D':
-                input->right = 1;
-                break;
-            case 'w':
-            case 'W':
-                input->thrust = 1;
-                break;
-            case ' ':
-                input->fire = 1;
-                break;
-            case 'm':
-            case 'M':
-            case '\t':
-                input->toggle_resolution = 1;
-                break;
-            case 'q':
-            case 'Q':
-            case 27:
-                input->exit_requested = 1;
-                break;
-        }
-
-        switch (scan) {
-            case 0x4b:
-                input->left = 1;
-                break;
-            case 0x4d:
-                input->right = 1;
-                break;
-            case 0x48:
-                input->thrust = 1;
-                break;
-            case 0x39:
-                input->fire = 1;
-                break;
-            case 0x3f:
-                input->toggle_resolution = 1;
-                break;
-            case 0x01:
-                input->exit_requested = 1;
-                break;
-        }
+    while (Bconstat(IKBD_DEVICE)) {
+        update_key_state((unsigned char) (Bconin(IKBD_DEVICE) & 0xffL));
     }
+
+    input->left = (uint8_t) (key_state[0x1eu] || key_state[0x4bu]);
+    input->right = (uint8_t) (key_state[0x20u] || key_state[0x4du]);
+    input->thrust = (uint8_t) (key_state[0x11u] || key_state[0x48u]);
+    input->fire = key_state[0x39u];
+    {
+        const unsigned char toggle_state = (unsigned char) (key_state[0x32u] || key_state[0x0fu] || key_state[0x3fu]);
+        input->toggle_resolution = (uint8_t) (toggle_state && !previous_toggle_state);
+        previous_toggle_state = toggle_state;
+    }
+    input->exit_requested = (uint8_t) (key_state[0x10u] || key_state[0x01u]);
 }
 
 void platform_begin_frame(void) {
@@ -187,6 +189,11 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
         y1 = current_config.height - 1;
     }
 
+    if (current_config.resolution == PLATFORM_RES_LOW && color != 0) {
+        st_draw_line_low(draw_buffer, x0, y0, x1, y1, color);
+        return;
+    }
+
     dx = (x0 < x1) ? (x1 - x0) : (x0 - x1);
     sx = (x0 < x1) ? 1 : -1;
     dy = (y0 < y1) ? -(y1 - y0) : -(y0 - y1);
@@ -211,6 +218,14 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
 
 void platform_end_frame(void) {
     Vsync();
+    Setscreen((void *) draw_buffer, (void *) draw_buffer, -1);
+    if (show_buffer == screen_pages[0]) {
+        show_buffer = screen_pages[1];
+        draw_buffer = screen_pages[0];
+    } else {
+        show_buffer = screen_pages[0];
+        draw_buffer = screen_pages[1];
+    }
 }
 
 int platform_cycle_resolution(PlatformConfig *config) {
@@ -225,9 +240,12 @@ int platform_cycle_resolution(PlatformConfig *config) {
     }
 
     current_config = *config;
-    Setscreen((void *) screen_base, (void *) screen_base, config->resolution);
+    show_buffer = screen_pages[0];
+    draw_buffer = screen_pages[1];
+    previous_toggle_state = 0;
+    clear_all_screens();
+    Setscreen((void *) show_buffer, (void *) show_buffer, config->resolution);
     set_palette(config);
-    clear_screen();
     return 1;
 }
 
