@@ -52,6 +52,7 @@ static uint32_t run(GameState *state, int mode) {
     full.dirty = platform_mark_dirty;
     full.text = platform_draw_text;
     full.clear_field = platform_clear_field;
+    full.points = platform_draw_points;
 
     memset(&input, 0, sizeof(input));
     input.left = 1;   /* manual input: measures the game itself */
@@ -96,6 +97,7 @@ int main(void) {
     GameState state;
     uint32_t ticks[3][MODE_COUNT];
     int rocks[3];
+    uint32_t star_ticks = 0;
     int wave_index;
     int mode;
 
@@ -117,6 +119,24 @@ int main(void) {
         }
     }
 
+    /* the starfield on its own: 24 single pixels */
+    {
+        int16_t points[48];
+        uint32_t start;
+        int frame;
+        int index;
+
+        for (index = 0; index < 24; ++index) {
+            points[index * 2] = (int16_t) (PLATFORM_FIELD_X + 10 + index * 11);
+            points[index * 2 + 1] = (int16_t) (PLATFORM_FIELD_Y + 10 + index * 5);
+        }
+        start = ST_HZ200;
+        for (frame = 0; frame < BENCH_FRAMES; ++frame) {
+            platform_draw_points(NULL, points, 24, GAME_COLOR_STAR_BRIGHT);
+        }
+        star_ticks = ST_HZ200 - start;
+    }
+
     platform_shutdown();
 
     for (wave_index = 0; wave_index < 3; ++wave_index) {
@@ -126,6 +146,10 @@ int main(void) {
             const unsigned long tenths = (unsigned long) (ticks[wave_index][mode] * 50 / BENCH_FRAMES);
             printf("  %-13s %lu.%lu ms\n", names[mode], tenths / 10, tenths % 10);
         }
+    }
+    {
+        const unsigned long tenths = (unsigned long) (star_ticks * 50 / BENCH_FRAMES);
+        printf("24 star pixels: %lu.%lu ms\n", tenths / 10, tenths % 10);
     }
     printf("20.0 ms = 50 fps\n");
     printf("press a key\n");

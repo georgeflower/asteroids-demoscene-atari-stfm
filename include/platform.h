@@ -24,6 +24,7 @@ void platform_begin_frame(void);
 void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t color);
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color);
 void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale);
+void platform_draw_points(void *context, const int16_t *points, int count, uint8_t color);
 void platform_clear_field(void *context);
 void platform_end_frame(void);
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1);

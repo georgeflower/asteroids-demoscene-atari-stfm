@@ -29,7 +29,7 @@
 #define FIELD_X1 (PLATFORM_FIELD_X + PLATFORM_FIELD_WIDTH - 1)
 
 #define SCORE_FILE "ASTROIDS.SCO"
-#define MAX_DIRTY_RECTS 64
+#define MAX_DIRTY_RECTS 96
 
 extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
@@ -398,6 +398,17 @@ void platform_draw_polygon(void *context, const int16_t *points, int count, uint
     }
 }
 
+void platform_draw_points(void *context, const int16_t *points, int count, uint8_t color) {
+    int index;
+
+    (void) context;
+    for (index = 0; index < count; ++index) {
+        if (inside_field(points[index * 2], points[index * 2 + 1])) {
+            st_plot_point(draw_buffer, points[index * 2], points[index * 2 + 1], color);
+        }
+    }
+}
+
 void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale) {
     (void) context;
     st_text_draw(draw_buffer, x, y, text, fg, bg, scale);
@@ -485,6 +496,13 @@ void platform_draw_text(void *context, int x, int y, const char *text, uint8_t f
     (void) fg;
     (void) bg;
     (void) scale;
+}
+
+void platform_draw_points(void *context, const int16_t *points, int count, uint8_t color) {
+    (void) context;
+    (void) points;
+    (void) count;
+    (void) color;
 }
 
 void platform_clear_field(void *context) {

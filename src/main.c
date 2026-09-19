@@ -30,6 +30,7 @@ int main(void) {
     renderer.dirty = platform_mark_dirty;
     renderer.text = platform_draw_text;
     renderer.clear_field = platform_clear_field;
+    renderer.points = platform_draw_points;
 
     if (!platform_init()) {
         return 1;

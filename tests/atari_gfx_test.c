@@ -211,6 +211,40 @@ static void reference_text(unsigned char *buffer, int x, int y, const char *text
     }
 }
 
+static void test_plot_point(void) {
+    int trial;
+
+    for (trial = 0; trial < 400; ++trial) {
+        const int x = (int) rand_below(WIDTH);
+        const int y = (int) rand_below(HEIGHT);
+        const int color = (int) rand_below(16);
+        int index;
+
+        for (index = 0; index < SCREEN_BYTES; ++index) {
+            buffer_a[index] = (unsigned char) (index * 5 + trial);
+            buffer_b[index] = buffer_a[index];
+        }
+        st_plot_point(buffer_a, x, y, color);
+        reference_pixel(buffer_b, x, y, color);
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("plot point", trial);
+        }
+    }
+    /* points outside the screen are ignored */
+    for (trial = 0; trial < 8; ++trial) {
+        static const int outside[8][2] = {{-1, 5}, {5, -1}, {320, 5}, {5, 200}, {-100, -100}, {400, 50}, {50, 300}, {320, 200}};
+
+        memset(buffer_a, 0x5a, SCREEN_BYTES);
+        memset(buffer_b, 0x5a, SCREEN_BYTES);
+        st_plot_point(buffer_a, outside[trial][0], outside[trial][1], 15);
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("plot point outside", trial);
+        }
+    }
+}
+
 static void test_text(void) {
     static const char *const samples[] = {
         "SCORE 001234", "HYPER 50%  ", "A/D OR ARROWS TURN  W OR UP THRUST", "lower case", "!?:.-,<=>()' _^*+/",
@@ -259,6 +293,7 @@ int main(void) {
     test_plane_matches_four_plane_drawer();
     test_clear_rect();
     test_text();
+    test_plot_point();
     printf("%d checks, %d failures\n", checks, failures);
     printf("press a key\n");
     getchar();

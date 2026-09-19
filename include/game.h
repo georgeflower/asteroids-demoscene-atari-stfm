@@ -15,8 +15,10 @@
  * increasing angles turn clockwise on screen (y grows downwards).
  */
 #define GAME_MAX_ASTEROIDS 40
-#define GAME_MAX_BULLETS 6
+#define GAME_MAX_BULLETS 12
 #define GAME_MAX_ASTEROID_POINTS 11
+#define GAME_MAX_POWERUPS 4
+#define GAME_STAR_COUNT 18
 #define GAME_FIX_SHIFT 16
 #define GAME_FIX_ONE (1L << GAME_FIX_SHIFT)
 #define GAME_WORLD_WIDTH 320
@@ -43,6 +45,9 @@
 #define GAME_COLOR_RED 7
 #define GAME_COLOR_ASTEROID_SMALL 8
 #define GAME_COLOR_GREY 9
+#define GAME_COLOR_MAGENTA 10
+#define GAME_COLOR_STAR_DIM 11
+#define GAME_COLOR_STAR_BRIGHT 15
 #define GAME_COLOR_WHITE GAME_COLOR_ASTEROID_LARGE
 
 #define GAME_ASTEROID_SMALL 1
@@ -111,6 +116,37 @@ typedef struct GameAsteroid {
     uint8_t cache_valid;
 } GameAsteroid;
 
+enum {
+    GAME_POWERUP_SHIELD = 0,
+    GAME_POWERUP_RAPID_FIRE,
+    GAME_POWERUP_EXTRA_LIFE,
+    GAME_POWERUP_MULTIPLIER,
+    GAME_POWERUP_TYPES
+};
+
+typedef struct GamePowerUp {
+    int32_t x;
+    int32_t y;
+    int32_t vx;
+    int32_t vy;
+    uint16_t life;
+    uint8_t active;
+    uint8_t type;
+} GamePowerUp;
+
+/* A background star: drifts slowly left. Its screen pixel lives in GameState.star_points and is only
+   recomputed when it changes; stale_ remembers the pixel it just left, which still has to be erased
+   from both screen buffers. Stars 0-5 are the far layer, 6-11 the middle, 12-17 the near one. */
+typedef struct GameStar {
+    int32_t x;             /* world x, 16.16 (y never changes) */
+    int16_t key;           /* x in 1/8 pixel steps: the screen position is only worked out when this changes */
+    int16_t stale_x;
+    int16_t stale_y;
+    uint8_t layer;
+    uint8_t stale_frames;
+    uint8_t fresh_frames;  /* frames the new pixel still has to be drawn every frame (once per screen buffer) */
+} GameStar;
+
 typedef struct GameHighScore {
     uint32_t score;
     char initials[4];
@@ -138,6 +174,12 @@ typedef struct GameState {
     GameShip ship;
     GameBullet bullets[GAME_MAX_BULLETS];
     GameAsteroid asteroids[GAME_MAX_ASTEROIDS];
+    GamePowerUp powerups[GAME_MAX_POWERUPS];
+    GameStar stars[GAME_STAR_COUNT];
+    int16_t star_points[GAME_STAR_COUNT * 2];   /* screen x,y of every star, grouped by layer */
+    uint16_t shield_timer;      /* frames left of each active power-up */
+    uint16_t rapid_timer;
+    uint16_t multiplier_timer;
     uint32_t rng_state;
 
     GameHighScore high_scores[GAME_HIGH_SCORE_COUNT];
@@ -158,6 +200,7 @@ typedef struct GameState {
     uint8_t hud_lives;
     uint8_t hud_wave;
     uint8_t hud_hyperspace;     /* percent charged */
+    uint8_t hud_powers[3];      /* seconds left of each power-up */
 } GameState;
 
 typedef void (*GameLineDrawer)(void *context, int x0, int y0, int x1, int y1, uint8_t color);
@@ -173,6 +216,9 @@ typedef void (*GameDirtyMarker)(void *context, int x0, int y0, int x1, int y1);
 /* Optional: opaque bitmap text. x is a multiple of 8 (16 at scale 2), scale is 1 or 2. */
 typedef void (*GameTextDrawer)(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale);
 
+/* Optional: single pixels of one colour (the stars). */
+typedef void (*GamePointDrawer)(void *context, const int16_t *points, int count, uint8_t color);
+
 /* Optional: clear the whole playing field (for the static screens). */
 typedef void (*GameFieldClearer)(void *context);
 
@@ -183,6 +229,7 @@ typedef struct GameRenderer {
     GameDirtyMarker dirty;
     GameTextDrawer text;
     GameFieldClearer clear_field;
+    GamePointDrawer points;
 } GameRenderer;
 
 /* The field rectangle is where the world is drawn on the screen. The game starts on the title screen. */

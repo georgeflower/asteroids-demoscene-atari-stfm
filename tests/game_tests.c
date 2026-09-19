@@ -46,12 +46,16 @@ static int rect_count;
 static TextCall texts[MAX_TEXTS];
 static int text_count;
 static int clear_calls;
+static int point_count;
+static int point_calls;
 
 static void reset_capture(void) {
     line_count = 0;
     rect_count = 0;
     text_count = 0;
     clear_calls = 0;
+    point_count = 0;
+    point_calls = 0;
     memset(color_counts, 0, sizeof(color_counts));
 }
 
@@ -97,6 +101,24 @@ static void capture_clear(void *context) {
     ++clear_calls;
 }
 
+static int point_layers[16];
+static int points_xy[8][GAME_STAR_COUNT * 2];
+
+static void capture_points(void *context, const int16_t *points, int count, uint8_t color) {
+    int index;
+
+    (void) context;
+    if (point_calls < 8) {
+        for (index = 0; index < count && index < GAME_STAR_COUNT; ++index) {
+            points_xy[point_calls][index * 2] = points[index * 2];
+            points_xy[point_calls][index * 2 + 1] = points[index * 2 + 1];
+        }
+        point_layers[point_calls] = color;
+    }
+    ++point_calls;
+    point_count += count;
+}
+
 static GameRenderer make_renderer(void) {
     GameRenderer renderer;
 
@@ -106,6 +128,7 @@ static GameRenderer make_renderer(void) {
     renderer.dirty = capture_rect;
     renderer.text = capture_text;
     renderer.clear_field = capture_clear;
+    renderer.points = capture_points;
     return renderer;
 }
 
@@ -1509,6 +1532,420 @@ static void test_sound_ids_are_valid(void) {
     sound_init(NULL);
 }
 
+static int events_contain_bit(uint16_t events, int sfx) {
+    return (events & (1u << sfx)) != 0;
+}
+
+/* ---- tests: power-ups and stars ---- */
+
+static void place_powerup_on_ship(GameState *state, int type) {
+    memset(state->powerups, 0, sizeof(state->powerups));
+    state->powerups[0].active = 1;
+    state->powerups[0].type = (uint8_t) type;
+    state->powerups[0].x = state->ship.x;
+    state->powerups[0].y = state->ship.y;
+    state->powerups[0].life = 100;
+}
+
+static void put_bullet_on_new_large_rock(GameState *state) {
+    clear_field(state);
+    state->asteroids[1].active = 1;
+    state->asteroids[1].size = GAME_ASTEROID_LARGE;
+    state->asteroids[1].point_count = 8;
+    state->asteroids[1].x = 100L << GAME_FIX_SHIFT;
+    state->asteroids[1].y = 50L << GAME_FIX_SHIFT;
+    state->bullets[0].active = 1;
+    state->bullets[0].life = 4;
+    state->bullets[0].x = state->asteroids[1].x;
+    state->bullets[0].y = state->asteroids[1].y;
+}
+
+static int active_powerups(const GameState *state) {
+    int index;
+    int count = 0;
+
+    for (index = 0; index < GAME_MAX_POWERUPS; ++index) {
+        count += state->powerups[index].active;
+    }
+    return count;
+}
+
+static void test_powerup_drops(void) {
+    GameState state;
+    int trial;
+    int drops = 0;
+    int types[GAME_POWERUP_TYPES] = {0, 0, 0, 0};
+
+    init_playing(&state);
+    for (trial = 0; trial < 800; ++trial) {
+        int index;
+
+        memset(state.powerups, 0, sizeof(state.powerups));
+        put_bullet_on_new_large_rock(&state);
+        state.ship.invulnerability = 255;
+        game_step(&state, &no_input);
+        for (index = 0; index < GAME_MAX_POWERUPS; ++index) {
+            if (state.powerups[index].active) {
+                ++drops;
+                CHECK(state.powerups[index].type < GAME_POWERUP_TYPES);
+                ++types[state.powerups[index].type];
+                /* it appears where the rock was, drifting slowly */
+                CHECK(state.powerups[index].life > 240);
+                CHECK(state.powerups[index].vx > -8000 && state.powerups[index].vx < 8000);
+            }
+        }
+        state.score = 0;
+    }
+    /* Lovable: 15% of destroyed rocks drop one (800 kills: expect about 120) */
+    CHECK(drops > 85 && drops < 160);
+    for (trial = 0; trial < GAME_POWERUP_TYPES; ++trial) {
+        CHECK(types[trial] > 10);   /* all four kinds turn up */
+    }
+}
+
+static void test_powerup_expires_and_wraps(void) {
+    GameState state;
+    int frame;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    memset(state.powerups, 0, sizeof(state.powerups));
+    state.powerups[0].active = 1;
+    state.powerups[0].type = GAME_POWERUP_SHIELD;
+    state.powerups[0].x = 319L << GAME_FIX_SHIFT;
+    state.powerups[0].y = 5L << GAME_FIX_SHIFT;
+    state.powerups[0].vx = 20000;
+    state.powerups[0].vy = -20000;
+    state.powerups[0].life = 250;
+
+    for (frame = 0; frame < 249; ++frame) {
+        game_step(&state, &no_input);
+        CHECK(state.powerups[0].x >= 0 && state.powerups[0].x < (320L << GAME_FIX_SHIFT));
+        CHECK(state.powerups[0].y >= 0 && state.powerups[0].y < (240L << GAME_FIX_SHIFT));
+    }
+    CHECK(state.powerups[0].active);
+    game_step(&state, &no_input);
+    CHECK(!state.powerups[0].active);   /* gone after 250 frames (5 s) */
+    CHECK(state.shield_timer == 0);     /* never collected */
+}
+
+static void test_powerup_shield(void) {
+    GameState state;
+    int frame;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 0;
+    place_powerup_on_ship(&state, GAME_POWERUP_SHIELD);
+    (void) game_take_sound_events(&state);
+    game_step(&state, &no_input);
+    CHECK(!state.powerups[0].active);
+    CHECK(state.shield_timer == 249);
+    CHECK(events_contain_bit(game_take_sound_events(&state), SFX_POWERUP));
+
+    /* rocks pass through the shielded ship... */
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    for (frame = 0; frame < 100; ++frame) {
+        game_step(&state, &no_input);
+    }
+    CHECK(state.lives == 3);
+    CHECK(state.shield_timer == 149);
+
+    /* ...until it runs out (250 frames, 5 s) */
+    for (frame = 0; frame < 149; ++frame) {
+        state.asteroids[1].x = state.ship.x;
+        state.asteroids[1].y = state.ship.y;
+        state.asteroids[1].active = 1;
+        game_step(&state, &no_input);
+    }
+    CHECK(state.shield_timer == 0);
+    put_rock_on_ship(&state, GAME_ASTEROID_LARGE);
+    game_step(&state, &no_input);
+    CHECK(state.lives == 2);
+}
+
+static void test_powerup_rapid_fire(void) {
+    GameState state;
+    GameInput fire = {0, 0, 0, 1, 0, 0, 0, 0};
+    int normal_shots = 0;
+    int rapid_shots = 0;
+    int frame;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    for (frame = 0; frame < 120; ++frame) {
+        const int before = state.ship.cooldown;
+        game_step(&state, &fire);
+        if (state.ship.cooldown > before || (before == 0 && state.ship.cooldown > 0)) {
+            ++normal_shots;
+        }
+    }
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    place_powerup_on_ship(&state, GAME_POWERUP_RAPID_FIRE);
+    game_step(&state, &no_input);
+    CHECK(state.rapid_timer == 499);
+    for (frame = 0; frame < 120; ++frame) {
+        const int before = state.ship.cooldown;
+        game_step(&state, &fire);
+        if (state.ship.cooldown > before || (before == 0 && state.ship.cooldown > 0)) {
+            ++rapid_shots;
+        }
+    }
+    /* every 12 frames normally (10), every 5 with rapid fire (24) */
+    CHECK(normal_shots >= 9 && normal_shots <= 11);
+    CHECK(rapid_shots >= 22 && rapid_shots <= 25);
+    CHECK(state.rapid_timer < 400);
+}
+
+static void test_powerup_multiplier_and_life(void) {
+    GameState state;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    place_powerup_on_ship(&state, GAME_POWERUP_MULTIPLIER);
+    game_step(&state, &no_input);
+    CHECK(state.multiplier_timer == 749);
+    put_bullet_on_new_large_rock(&state);
+    state.score = 0;
+    game_step(&state, &no_input);
+    CHECK(state.score == 40);   /* 20 x 2 */
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    place_powerup_on_ship(&state, GAME_POWERUP_EXTRA_LIFE);
+    (void) game_take_sound_events(&state);
+    game_step(&state, &no_input);
+    CHECK(state.lives == 4);
+    CHECK(events_contain_bit(game_take_sound_events(&state), SFX_EXTRA_LIFE));
+
+    state.lives = 9;
+    place_powerup_on_ship(&state, GAME_POWERUP_EXTRA_LIFE);
+    game_step(&state, &no_input);
+    CHECK(state.lives == 9);   /* capped */
+
+    /* a new game clears every power-up */
+    state.shield_timer = 100;
+    state.rapid_timer = 100;
+    state.multiplier_timer = 100;
+    place_powerup_on_ship(&state, GAME_POWERUP_SHIELD);
+    game_start(&state);
+    CHECK(state.shield_timer == 0 && state.rapid_timer == 0 && state.multiplier_timer == 0);
+    CHECK(active_powerups(&state) == 0);
+}
+
+static void test_powerup_render_and_hud(void) {
+    GameState state;
+    int type;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 0;
+    state.ship.x = 20L << GAME_FIX_SHIFT;
+    state.ship.y = 20L << GAME_FIX_SHIFT;
+    for (type = 0; type < GAME_POWERUP_TYPES; ++type) {
+        const int expected_color = (type == 0) ? GAME_COLOR_SHIP : (type == 1) ? GAME_COLOR_RED
+                                   : (type == 2) ? GAME_COLOR_MAGENTA : GAME_COLOR_YELLOW;
+        int base;
+
+        memset(state.powerups, 0, sizeof(state.powerups));
+        state.powerups[0].active = 1;
+        state.powerups[0].type = (uint8_t) type;
+        state.powerups[0].x = 200L << GAME_FIX_SHIFT;
+        state.powerups[0].y = 150L << GAME_FIX_SHIFT;
+        state.powerups[0].life = 200;
+        render(&state);
+        /* octagon (8) plus a symbol: a square (4), two bars, a plus or a cross (2 each) */
+        base = (type == GAME_POWERUP_SHIELD) ? 12 : 10;
+        CHECK(color_counts[expected_color] >= base);
+        CHECK(rect_count >= 3);
+    }
+
+    /* it blinks when about to vanish */
+    memset(state.powerups, 0, sizeof(state.powerups));
+    state.powerups[0].active = 1;
+    state.powerups[0].type = GAME_POWERUP_MULTIPLIER;
+    state.powerups[0].x = 200L << GAME_FIX_SHIFT;
+    state.powerups[0].y = 150L << GAME_FIX_SHIFT;
+    state.powerups[0].life = 40;
+    render(&state);
+    {
+        const int visible = color_counts[GAME_COLOR_YELLOW];
+        state.powerups[0].life = 44;
+        render(&state);
+        CHECK((visible == 0) != (color_counts[GAME_COLOR_YELLOW] == 0));
+    }
+
+    /* the HUD counts the effects down in seconds */
+    memset(state.powerups, 0, sizeof(state.powerups));
+    state.shield_timer = 250;
+    state.rapid_timer = 51;
+    state.multiplier_timer = 0;
+    state.hud_refresh = 2;
+    render(&state);
+    CHECK(has_text("S05"));
+    CHECK(has_text("R02"));
+    {
+        const TextCall *shield = find_text("S05");
+        CHECK(shield != NULL && shield->y == 8 && shield->x == 224 && shield->bg == GAME_COLOR_FRAME);
+    }
+    render(&state);
+    render(&state);
+    state.shield_timer = 200;
+    render(&state);
+    CHECK(has_text("S04"));
+
+    /* the shield is drawn as a ring around the ship */
+    state.shield_timer = 200;
+    state.ship.invulnerability = 0;
+    render(&state);
+    CHECK(color_counts[GAME_COLOR_SHIP] >= 4 + 8);
+}
+
+static int expected_star_x(const GameState *state, int index) {
+    /* the same mapping the game uses: field origin + world x * x_scale */
+    return FIELD_X + (int) (((long) (state->stars[index].x >> 11) * state->x_scale) >> 13);
+}
+
+static void test_stars(void) {
+    GameState state;
+    int index;
+    int layer_counts[3] = {0, 0, 0};
+    int32_t before[GAME_STAR_COUNT];
+    int frame;
+
+    init_playing(&state);
+    for (index = 0; index < GAME_STAR_COUNT; ++index) {
+        CHECK(state.stars[index].x >= 0 && state.stars[index].x < (320L << GAME_FIX_SHIFT));
+        CHECK(state.stars[index].layer < 3);
+        CHECK(state.stars[index].layer == index / 6);   /* grouped by layer, 6 each */
+        ++layer_counts[state.stars[index].layer];
+        before[index] = state.stars[index].x;
+        CHECK(state.star_points[index * 2] >= FIELD_X && state.star_points[index * 2] < FIELD_X + FIELD_W);
+        CHECK(state.star_points[index * 2 + 1] >= FIELD_Y && state.star_points[index * 2 + 1] < FIELD_Y + FIELD_H);
+    }
+    CHECK(layer_counts[0] == 6 && layer_counts[1] == 6 && layer_counts[2] == 6);
+
+    /* they drift left, the near ones faster, and wrap round */
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    for (frame = 0; frame < 100; ++frame) {
+        game_step(&state, &no_input);
+    }
+    for (index = 0; index < GAME_STAR_COUNT; ++index) {
+        const int32_t moved = before[index] - state.stars[index].x;
+        const int layer = state.stars[index].layer;
+        const int32_t speed = (layer == 0) ? 524 : (layer == 1) ? 1573 : 3146;
+
+        if (moved < 0) {
+            continue;   /* wrapped */
+        }
+        CHECK(moved == 100 * speed || moved == 96 * speed || moved == 104 * speed);   /* every fourth frame, four steps at once */
+        /* the stored screen pixel follows the star (to within the eighth-of-a-pixel it updates by) */
+        {
+            const int difference = expected_star_x(&state, index) - state.star_points[index * 2];
+            CHECK(difference >= -1 && difference <= 1);
+        }
+    }
+    state.stars[0].x = 100;   /* less than one step's drift from the left edge */
+    game_step(&state, &no_input);
+    game_step(&state, &no_input);
+    game_step(&state, &no_input);
+    game_step(&state, &no_input);
+    CHECK(state.stars[0].x > (300L << GAME_FIX_SHIFT));   /* wrapped to the right edge */
+    CHECK(state.star_points[0] > FIELD_X + FIELD_W - 30);
+
+    /* paused: they stand still */
+    {
+        GameInput pause = {0, 0, 0, 0, 0, 0, 1, 0};
+        int32_t x = state.stars[3].x;
+        game_step(&state, &pause);
+        game_step(&state, &no_input);
+        CHECK(state.stars[3].x == x);
+    }
+}
+
+static void test_stars_render_and_erase(void) {
+    GameState state;
+    int layer;
+    int index;
+    int frame;
+
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    /* a freshly cleared screen gets every star (the first two frames, one per screen buffer) */
+    render(&state);
+    CHECK(point_calls == 3);
+    CHECK(point_count == GAME_STAR_COUNT);
+    for (layer = 0; layer < 3; ++layer) {
+        CHECK(point_layers[layer] == (layer == 0 ? GAME_COLOR_STAR_DIM : layer == 1 ? GAME_COLOR_GREY : GAME_COLOR_STAR_BRIGHT));
+        for (index = 0; index < GAME_STAR_COUNT / 3; ++index) {
+            const int star = layer * 6 + index;
+            CHECK(points_xy[layer][index * 2] == state.star_points[star * 2]);
+            CHECK(points_xy[layer][index * 2 + 1] == state.star_points[star * 2 + 1]);
+        }
+    }
+    render(&state);
+    CHECK(point_count == GAME_STAR_COUNT);
+
+    /* after that a quarter of them per frame: over eight frames every star is drawn twice in a row,
+       plus two extra frames for any star that moved onto a new pixel */
+    {
+        int total = 0;
+        int frame_index;
+
+        for (frame_index = 0; frame_index < 8; ++frame_index) {
+            game_step(&state, &no_input);
+            render(&state);
+            CHECK(point_count <= 8);
+            total += point_count;
+        }
+        CHECK(total >= 2 * GAME_STAR_COUNT && total <= 2 * GAME_STAR_COUNT + 2 * GAME_STAR_COUNT);
+    }
+
+    /* run until a near star moves onto a new pixel */
+    {
+        const int star = 12;
+        const int old_x = state.star_points[star * 2];
+        const int old_y = state.star_points[star * 2 + 1];
+        int covered_frames = 0;
+
+        for (frame = 0; frame < 200 && state.star_points[star * 2] == old_x; ++frame) {
+            game_step(&state, &no_input);
+        }
+        CHECK(state.star_points[star * 2] != old_x);
+        CHECK(state.star_points[star * 2 + 1] == old_y);   /* stars only move sideways */
+
+        /* the pixel it left is erased on the next two frames (one per screen buffer), not more */
+        for (frame = 0; frame < 4; ++frame) {
+            int found = 0;
+            int r;
+
+            render(&state);
+            for (r = 0; r < rect_count && r < MAX_RECTS; ++r) {
+                if (rects[r][0] <= old_x && rects[r][2] >= old_x && rects[r][1] <= old_y && rects[r][3] >= old_y &&
+                    rects[r][2] - rects[r][0] <= 3 && rects[r][3] - rects[r][1] <= 3) {
+                    found = 1;
+                }
+            }
+            covered_frames += found;
+        }
+        CHECK(covered_frames == 2);
+    }
+
+    /* stars are only drawn while playing */
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    render(&state);
+    CHECK(point_calls == 0);
+}
+
 int main(void) {
     test_initial_state();
     test_start_from_title();
@@ -1541,6 +1978,14 @@ int main(void) {
     test_title_prompt_blinks();
     test_game_over_and_initials_screens();
     test_banner_and_playing_screen();
+    test_powerup_drops();
+    test_powerup_expires_and_wraps();
+    test_powerup_shield();
+    test_powerup_rapid_fire();
+    test_powerup_multiplier_and_life();
+    test_powerup_render_and_hud();
+    test_stars();
+    test_stars_render_and_erase();
     test_sound_engine();
     test_game_sound_events();
     test_sound_ids_are_valid();

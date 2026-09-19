@@ -83,6 +83,35 @@ static void draw_cell_2x(unsigned char *buffer, int x, int y, const unsigned cha
     }
 }
 
+/* y * 160 without a 32-bit multiply (the 68000 has none): a table, filled on first use. */
+static short row_offset[SCREEN_HEIGHT];
+static int row_offset_ready;
+
+void st_plot_point(unsigned char *buffer, int x, int y, int color) {
+    unsigned char *row;
+    unsigned char mask;
+    unsigned char keep;
+
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) {
+        return;
+    }
+    if (!row_offset_ready) {
+        int line;
+
+        for (line = 0; line < SCREEN_HEIGHT; ++line) {
+            row_offset[line] = (short) (line * ROW_BYTES);
+        }
+        row_offset_ready = 1;
+    }
+    row = buffer + row_offset[y] + ((x >> 4) << 3) + ((x >> 3) & 1);
+    mask = (unsigned char) (0x80 >> (x & 7));
+    keep = (unsigned char) ~mask;
+    row[0] = (unsigned char) ((row[0] & keep) | ((color & 1) ? mask : 0));
+    row[2] = (unsigned char) ((row[2] & keep) | ((color & 2) ? mask : 0));
+    row[4] = (unsigned char) ((row[4] & keep) | ((color & 4) ? mask : 0));
+    row[6] = (unsigned char) ((row[6] & keep) | ((color & 8) ? mask : 0));
+}
+
 void st_text_draw(unsigned char *buffer, int x, int y, const char *text, int fg, int bg, int scale) {
     const int cell_width = (scale == 2) ? 16 : 8;
     const int cell_height = (scale == 2) ? 16 : 8;

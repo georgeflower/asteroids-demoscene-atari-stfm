@@ -27,6 +27,7 @@ int main(void) {
     renderer.dirty = platform_mark_dirty;
     renderer.text = platform_draw_text;
     renderer.clear_field = platform_clear_field;
+    renderer.points = platform_draw_points;
 
     if (!platform_init()) {
         return 1;
@@ -35,6 +36,21 @@ int main(void) {
     game_init(&state, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
     game_start(&state);
     state.score = 12340;
+    {
+        /* one of each power-up on show, and some effects running, to see the icons and the HUD badges */
+        int index;
+
+        for (index = 0; index < GAME_POWERUP_TYPES; ++index) {
+            state.powerups[index].active = 1;
+            state.powerups[index].type = (uint8_t) index;
+            state.powerups[index].x = (int32_t) (70 + index * 60) << GAME_FIX_SHIFT;
+            state.powerups[index].y = 60L << GAME_FIX_SHIFT;
+            state.powerups[index].life = 240;
+        }
+        state.shield_timer = 200;
+        state.rapid_timer = 300;
+        state.multiplier_timer = 500;
+    }
 
     for (frame = 0; frame < 800; ++frame) {
         memset(&input, 0, sizeof(input));

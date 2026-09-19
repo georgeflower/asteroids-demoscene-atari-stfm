@@ -9,4 +9,7 @@
  */
 void st_text_draw(unsigned char *buffer, int x, int y, const char *text, int fg, int bg, int scale);
 
+/* Set one pixel to palette index `color` (all four planes), for the stars. */
+void st_plot_point(unsigned char *buffer, int x, int y, int color);
+
 #endif

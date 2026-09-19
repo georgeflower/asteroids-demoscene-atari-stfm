@@ -31,6 +31,14 @@
 #define HYPERSPACE_SAFE_MARGIN 24            /* clear of every rock by this much (60 of Lovable's 800x600 px) */
 #define HYPERSPACE_ATTEMPTS 100
 #define MAX_LIVES 9
+#define POWERUP_LIFE_FRAMES 250              /* 300 frames @60 Hz */
+#define POWERUP_DROP_PERCENT 15
+#define POWERUP_RADIUS 6
+#define SHIELD_FRAMES 250                    /* 300 @60 Hz */
+#define RAPID_FIRE_FRAMES 500                /* 600 @60 Hz */
+#define MULTIPLIER_FRAMES 750                /* 900 @60 Hz */
+#define RAPID_FIRE_COOLDOWN 5                /* 100 ms */
+#define STAR_LAYERS 3
 
 #define BANNER_FRAMES 75
 #define GAME_OVER_FRAMES 150
@@ -49,6 +57,15 @@ static const uint8_t asteroid_color_table[4] = {
 static const uint16_t asteroid_angle_step[4] = {8192, 7282, 6553, 5957};   /* 65536 / (8..11) */
 
 static const int8_t ship_shape[4][2] = {{8, 0}, {-8, -4}, {-4, 0}, {-8, 4}};
+
+/* Power-up icon: an octagon of radius 7 (also used, larger, for the shield ring) */
+static const int8_t octagon[8][2] = {{7, 0}, {5, 5}, {0, 7}, {-5, 5}, {-7, 0}, {-5, -5}, {0, -7}, {5, -5}};
+static const uint8_t powerup_color_table[GAME_POWERUP_TYPES] = {
+    GAME_COLOR_SHIP, GAME_COLOR_RED, GAME_COLOR_MAGENTA, GAME_COLOR_YELLOW
+};
+/* stars drift left this fast per 50 Hz frame (Lovable: 0.1 / 0.3 / 0.6 of 10 px/s at 800 wide) */
+static const int32_t star_speed_table[STAR_LAYERS] = {524, 1573, 3146};
+static const uint8_t star_color_table[STAR_LAYERS] = {GAME_COLOR_STAR_DIM, GAME_COLOR_GREY, GAME_COLOR_STAR_BRIGHT};
 
 /* 16x16 -> 32 bit multiply: a single muls.w on the 68000 instead of a library call. */
 static inline __attribute__((always_inline)) int32_t mul16(int16_t a, int16_t b) {
@@ -130,6 +147,24 @@ static int within_radius(int32_t ax, int32_t ay, int32_t bx, int32_t by, int rad
         return 0;
     }
     return (mul16(dx, dx) + mul16(dy, dy)) < mul16(r, r);
+}
+
+/* World position (16.16) to screen coordinate; keeps 5 fractional bits so slow rocks move smoothly. */
+static inline __attribute__((always_inline)) int screen_x(const GameState *state, int32_t world_x) {
+    return state->field_x + (int) (mul16((int16_t) (world_x >> 11), (int16_t) state->x_scale) >> 13);
+}
+
+static inline __attribute__((always_inline)) int screen_y(const GameState *state, int32_t world_y) {
+    return state->field_y + (int) (mul16((int16_t) (world_y >> 11), (int16_t) state->y_scale) >> 13);
+}
+
+/* World-space offset (whole pixels) to screen-space offset. */
+static inline __attribute__((always_inline)) int scale_x(const GameState *state, int offset) {
+    return (int) (mul16((int16_t) offset, (int16_t) state->x_scale) >> 8);
+}
+
+static inline __attribute__((always_inline)) int scale_y(const GameState *state, int offset) {
+    return (int) (mul16((int16_t) offset, (int16_t) state->y_scale) >> 8);
 }
 
 static void emit(GameState *state, int sfx) {
@@ -248,7 +283,7 @@ static void split_asteroid(GameState *state, const GameAsteroid *asteroid) {
 
 /* Award points, and an extra life for every EXTRA_LIFE_INTERVAL crossed. */
 static void add_score(GameState *state, uint32_t points) {
-    state->score += points;
+    state->score += (state->multiplier_timer > 0) ? points * 2u : points;
     while (state->score >= state->next_extra_life) {
         if (state->lives < MAX_LIVES) {
             ++state->lives;
@@ -306,7 +341,7 @@ static void fire_bullet(GameState *state) {
             bullet->y = state->ship.y;
             bullet->vx = state->ship.vx + trig_mul(BULLET_SPEED, trig_cos(state->ship.angle));
             bullet->vy = state->ship.vy + trig_mul(BULLET_SPEED, trig_sin(state->ship.angle));
-            state->ship.cooldown = SHIP_COOLDOWN_FRAMES;
+            state->ship.cooldown = (state->rapid_timer > 0) ? RAPID_FIRE_COOLDOWN : SHIP_COOLDOWN_FRAMES;
             emit(state, SFX_SHOOT);
             return;
         }
@@ -433,6 +468,136 @@ static void update_asteroids(GameState *state) {
     }
 }
 
+/* ---- power-ups and stars ---- */
+
+static void spawn_powerup(GameState *state, int32_t x, int32_t y, int type) {
+    int index;
+
+    for (index = 0; index < GAME_MAX_POWERUPS; ++index) {
+        GamePowerUp *powerup = &state->powerups[index];
+        if (!powerup->active) {
+            powerup->active = 1;
+            powerup->type = (uint8_t) type;
+            powerup->x = x;
+            powerup->y = y;
+            /* drifts at up to 0.12 px/frame in each direction (Lovable: 0.25 px/frame at 60 Hz, x0.4x1.2 x0.5) */
+            powerup->vx = (int32_t) game_rand_below(state, 15729) - 7864;
+            powerup->vy = (int32_t) game_rand_below(state, 15729) - 7864;
+            powerup->life = POWERUP_LIFE_FRAMES;
+            return;
+        }
+    }
+}
+
+static void maybe_drop_powerup(GameState *state, int32_t x, int32_t y) {
+    if (game_rand_below(state, 100) < POWERUP_DROP_PERCENT) {
+        spawn_powerup(state, x, y, game_rand_below(state, GAME_POWERUP_TYPES));
+    }
+}
+
+static void collect_powerup(GameState *state, int type) {
+    switch (type) {
+    case GAME_POWERUP_SHIELD:
+        state->shield_timer = SHIELD_FRAMES;
+        break;
+    case GAME_POWERUP_RAPID_FIRE:
+        state->rapid_timer = RAPID_FIRE_FRAMES;
+        break;
+    case GAME_POWERUP_EXTRA_LIFE:
+        if (state->lives < MAX_LIVES) {
+            ++state->lives;
+        }
+        break;
+    default:
+        state->multiplier_timer = MULTIPLIER_FRAMES;
+        break;
+    }
+    emit(state, type == GAME_POWERUP_EXTRA_LIFE ? SFX_EXTRA_LIFE : SFX_POWERUP);
+}
+
+static void update_powerups(GameState *state) {
+    int index;
+
+    for (index = 0; index < GAME_MAX_POWERUPS; ++index) {
+        GamePowerUp *powerup = &state->powerups[index];
+        if (!powerup->active) {
+            continue;
+        }
+        powerup->x += powerup->vx;
+        powerup->y += powerup->vy;
+        wrap_world(&powerup->x, &powerup->y);
+        if (powerup->life > 0) {
+            --powerup->life;
+        }
+        if (within_radius(powerup->x, powerup->y, state->ship.x, state->ship.y, POWERUP_RADIUS + 4)) {
+            collect_powerup(state, powerup->type);
+            powerup->active = 0;
+        } else if (powerup->life == 0) {
+            powerup->active = 0;
+        }
+    }
+
+    if (state->shield_timer > 0) {
+        --state->shield_timer;
+    }
+    if (state->rapid_timer > 0) {
+        --state->rapid_timer;
+    }
+    if (state->multiplier_timer > 0) {
+        --state->multiplier_timer;
+    }
+}
+
+static void init_stars(GameState *state) {
+    int index;
+
+    for (index = 0; index < GAME_STAR_COUNT; ++index) {
+        GameStar *star = &state->stars[index];
+        const int32_t world_y = (int32_t) game_rand_below(state, GAME_WORLD_HEIGHT) << GAME_FIX_SHIFT;
+
+        star->x = (int32_t) game_rand_below(state, GAME_WORLD_WIDTH) << GAME_FIX_SHIFT;
+        star->layer = (uint8_t) (index / (GAME_STAR_COUNT / STAR_LAYERS));
+        star->key = (int16_t) (star->x >> 13);
+        star->stale_frames = 0;
+        star->fresh_frames = 0;
+        state->star_points[index * 2] = (int16_t) screen_x(state, star->x);
+        state->star_points[index * 2 + 1] = (int16_t) screen_y(state, world_y);
+    }
+}
+
+/* Drift left. A star's screen pixel is only worked out when it has moved an eighth of a pixel,
+   and its old pixel is remembered for erasing when it actually changes. */
+static void update_stars(GameState *state) {
+    int index;
+
+    /* they crawl (a pixel every 2-20 frames), so every fourth frame at four times the step is enough */
+    if ((state->frame & 3) != 0) {
+        return;
+    }
+    for (index = 0; index < GAME_STAR_COUNT; ++index) {
+        GameStar *star = &state->stars[index];
+        int16_t key;
+
+        star->x -= star_speed_table[star->layer] * 4;
+        if (star->x < 0) {
+            star->x += (int32_t) GAME_WORLD_WIDTH << GAME_FIX_SHIFT;
+        }
+        key = (int16_t) (star->x >> 13);
+        if (key != star->key) {
+            const int16_t new_x = (int16_t) screen_x(state, star->x);
+
+            star->key = key;
+            if (new_x != state->star_points[index * 2]) {
+                star->stale_x = state->star_points[index * 2];
+                star->stale_y = state->star_points[index * 2 + 1];
+                star->stale_frames = 2;   /* the old pixel is on both screen buffers */
+                star->fresh_frames = 2;   /* and the new one has to get onto both */
+                state->star_points[index * 2] = new_x;
+            }
+        }
+    }
+}
+
 static void resolve_bullet_collisions(GameState *state) {
     int bullet_index;
     int asteroid_index;
@@ -456,6 +621,7 @@ static void resolve_bullet_collisions(GameState *state) {
                 emit(state, exploded.size == GAME_ASTEROID_LARGE ? SFX_EXPLODE_LARGE :
                             exploded.size == GAME_ASTEROID_MEDIUM ? SFX_EXPLODE_MEDIUM : SFX_EXPLODE_SMALL);
                 split_asteroid(state, &exploded);
+                maybe_drop_powerup(state, exploded.x, exploded.y);
                 break;
             }
         }
@@ -477,7 +643,7 @@ static void lose_life(GameState *state) {
 static void resolve_ship_collisions(GameState *state) {
     int asteroid_index;
 
-    if (state->ship.invulnerability > 0) {
+    if (state->ship.invulnerability > 0 || state->shield_timer > 0) {
         return;
     }
 
@@ -588,6 +754,10 @@ void game_start(GameState *state) {
     state->wave = 1;
     state->lives = GAME_START_LIVES;
     state->paused = 0;
+    state->shield_timer = 0;
+    state->rapid_timer = 0;
+    state->multiplier_timer = 0;
+    memset(state->powerups, 0, sizeof(state->powerups));
     memset(state->asteroids, 0, sizeof(state->asteroids));
     memset(state->bullets, 0, sizeof(state->bullets));
     reset_ship(state);
@@ -619,6 +789,7 @@ void game_init(GameState *state, uint16_t field_x, uint16_t field_y, uint16_t fi
         state->high_scores[index].initials[1] = '-';
         state->high_scores[index].initials[2] = '-';
     }
+    init_stars(state);
     reset_ship(state);
     state->prompt_visible = 1;
     state->hud_refresh = 2;
@@ -648,6 +819,8 @@ static void step_playing(GameState *state, const GameInput *input, const GameInp
     update_ship(state, input);
     update_bullets(state);
     update_asteroids(state);
+    update_powerups(state);
+    update_stars(state);
     resolve_bullet_collisions(state);
     resolve_ship_collisions(state);
 
@@ -755,24 +928,6 @@ void game_step(GameState *state, const GameInput *input) {
 
 /* ---- rendering ---- */
 
-/* World position (16.16) to screen coordinate; keeps 5 fractional bits so slow rocks move smoothly. */
-static inline __attribute__((always_inline)) int screen_x(const GameState *state, int32_t world_x) {
-    return state->field_x + (int) (mul16((int16_t) (world_x >> 11), (int16_t) state->x_scale) >> 13);
-}
-
-static inline __attribute__((always_inline)) int screen_y(const GameState *state, int32_t world_y) {
-    return state->field_y + (int) (mul16((int16_t) (world_y >> 11), (int16_t) state->y_scale) >> 13);
-}
-
-/* World-space offset (whole pixels) to screen-space offset. */
-static inline __attribute__((always_inline)) int scale_x(const GameState *state, int offset) {
-    return (int) (mul16((int16_t) offset, (int16_t) state->x_scale) >> 8);
-}
-
-static inline __attribute__((always_inline)) int scale_y(const GameState *state, int offset) {
-    return (int) (mul16((int16_t) offset, (int16_t) state->y_scale) >> 8);
-}
-
 static void mark_rect(const GameRenderer *renderer, int x0, int y0, int x1, int y1) {
     if (renderer->dirty != NULL) {
         renderer->dirty(renderer->context, x0 - 1, y0 - 1, x1 + 1, y1 + 1);
@@ -859,6 +1014,21 @@ static void draw_ship(const GameState *state, const GameRenderer *renderer) {
         grow_bounds(&min_x, &min_y, &max_x, &max_y, right[0], right[1]);
     }
 
+    if (state->shield_timer > 0 && (state->shield_timer > 50 || ((state->shield_timer >> 2) & 1))) {
+        /* a ring around the ship (the power-up octagon at 12/7 the size) */
+        int16_t ring[16];
+
+        for (index = 0; index < 8; ++index) {
+            const int x = center_x + scale_x(state, (octagon[index][0] * 12) / 7);
+            const int y = center_y + scale_y(state, (octagon[index][1] * 12) / 7);
+
+            ring[index * 2] = (int16_t) x;
+            ring[index * 2 + 1] = (int16_t) y;
+            grow_bounds(&min_x, &min_y, &max_x, &max_y, x, y);
+        }
+        draw_outline(renderer, ring, 8, GAME_COLOR_SHIP);
+    }
+
     mark_rect(renderer, min_x, min_y, max_x, max_y);
 }
 
@@ -929,6 +1099,102 @@ static void draw_asteroid(const GameState *state, GameAsteroid *asteroid, const 
 
     mark_rect(renderer, center_x + asteroid->bound_x0, center_y + asteroid->bound_y0,
               center_x + asteroid->bound_x1, center_y + asteroid->bound_y1);
+}
+
+/* ---- stars, power-ups, shield ---- */
+
+/*
+ * Stars stay on both screen buffers between frames, so they are not redrawn every frame (a pixel plot is
+ * surprisingly slow on the 68000). A star is drawn when its screen is redrawn from scratch, on the two
+ * frames after it moves, and otherwise once every eight frames (two in a row, for the two buffers) so that
+ * any a rock has wiped out come back quickly.
+ */
+static void draw_stars(GameState *state, const GameRenderer *renderer) {
+    static const int per_layer = GAME_STAR_COUNT / STAR_LAYERS;
+    const int phase = (state->frame >> 1) & 3;
+    const int everything = state->screen_refresh > 0;
+    int16_t plot[STAR_LAYERS][GAME_STAR_COUNT * 2 / STAR_LAYERS];
+    int counts[STAR_LAYERS];
+    int index;
+    int layer;
+
+    for (layer = 0; layer < STAR_LAYERS; ++layer) {
+        counts[layer] = 0;
+    }
+    for (index = 0; index < GAME_STAR_COUNT; ++index) {
+        GameStar *star = &state->stars[index];
+
+        /* pixels the stars just left are erased on the next two frames (once per screen buffer) */
+        if (star->stale_frames > 0) {
+            mark_rect(renderer, star->stale_x, star->stale_y, star->stale_x, star->stale_y);
+            --star->stale_frames;
+        }
+        if (everything || star->fresh_frames > 0 || (index & 3) == phase) {
+            if (star->fresh_frames > 0) {
+                --star->fresh_frames;
+            }
+            plot[star->layer][counts[star->layer] * 2] = state->star_points[index * 2];
+            plot[star->layer][counts[star->layer] * 2 + 1] = state->star_points[index * 2 + 1];
+            ++counts[star->layer];
+        }
+    }
+    if (renderer->points != NULL) {
+        for (layer = 0; layer < STAR_LAYERS; ++layer) {
+            if (counts[layer] > 0) {
+                renderer->points(renderer->context, plot[layer], counts[layer], star_color_table[layer]);
+            }
+        }
+    }
+    (void) per_layer;
+}
+
+static void draw_powerup(const GameState *state, const GamePowerUp *powerup, const GameRenderer *renderer) {
+    const int cx = screen_x(state, powerup->x);
+    const int cy = screen_y(state, powerup->y);
+    const uint8_t color = powerup_color_table[powerup->type];
+    int16_t points[16];
+    int index;
+
+    if (powerup->life < 60 && ((powerup->life >> 2) & 1)) {
+        return;   /* blinks when about to vanish */
+    }
+    for (index = 0; index < 8; ++index) {
+        points[index * 2] = (int16_t) (cx + scale_x(state, octagon[index][0]));
+        points[index * 2 + 1] = (int16_t) (cy + scale_y(state, octagon[index][1]));
+    }
+    draw_outline(renderer, points, 8, color);
+
+    /* a symbol inside tells the types apart */
+    switch (powerup->type) {
+    case GAME_POWERUP_SHIELD: {       /* a square */
+        int16_t box[8];
+        static const int8_t corner[4][2] = {{-3, -3}, {3, -3}, {3, 3}, {-3, 3}};
+        for (index = 0; index < 4; ++index) {
+            box[index * 2] = (int16_t) (cx + scale_x(state, corner[index][0]));
+            box[index * 2 + 1] = (int16_t) (cy + scale_y(state, corner[index][1]));
+        }
+        draw_outline(renderer, box, 4, color);
+        break;
+    }
+    case GAME_POWERUP_RAPID_FIRE:     /* two bars */
+        renderer->line(renderer->context, cx + scale_x(state, -2), cy + scale_y(state, -4),
+                       cx + scale_x(state, -2), cy + scale_y(state, 4), color);
+        renderer->line(renderer->context, cx + scale_x(state, 2), cy + scale_y(state, -4),
+                       cx + scale_x(state, 2), cy + scale_y(state, 4), color);
+        break;
+    case GAME_POWERUP_EXTRA_LIFE:     /* a plus */
+        renderer->line(renderer->context, cx + scale_x(state, -4), cy, cx + scale_x(state, 4), cy, color);
+        renderer->line(renderer->context, cx, cy + scale_y(state, -4), cx, cy + scale_y(state, 4), color);
+        break;
+    default:                          /* a cross: double score */
+        renderer->line(renderer->context, cx + scale_x(state, -3), cy + scale_y(state, -3),
+                       cx + scale_x(state, 3), cy + scale_y(state, 3), color);
+        renderer->line(renderer->context, cx + scale_x(state, -3), cy + scale_y(state, 3),
+                       cx + scale_x(state, 3), cy + scale_y(state, -3), color);
+        break;
+    }
+    mark_rect(renderer, cx + scale_x(state, -7), cy + scale_y(state, -7), cx + scale_x(state, 7),
+              cy + scale_y(state, 7));
 }
 
 /* ---- text screens ---- */
@@ -1076,6 +1342,20 @@ static void draw_hud(const GameState *state, const GameRenderer *renderer) {
     }
     put_text(renderer, 56, 8, icons, GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
 
+    for (index = 0; index < 3; ++index) {
+        static const char letters[3] = {'S', 'R', 'X'};
+        static const uint8_t colors[3] = {GAME_COLOR_SHIP, GAME_COLOR_RED, GAME_COLOR_YELLOW};
+        char badge[4];
+
+        if (state->hud_powers[index] > 0) {
+            badge[0] = letters[index];
+            format_number(badge + 1, state->hud_powers[index] % 100u, 2);
+        } else {
+            memcpy(badge, "   ", 4);
+        }
+        put_text(renderer, 224 + index * 32, 8, badge, colors[index], GAME_COLOR_FRAME, 1);
+    }
+
     count = hyperspace_percent(state);
     if (count >= 100) {
         put_text(renderer, 120, 8, "HYPER READY ", GAME_COLOR_SHIP, GAME_COLOR_FRAME, 1);
@@ -1090,12 +1370,23 @@ static void draw_hud(const GameState *state, const GameRenderer *renderer) {
     }
 }
 
+static uint8_t power_seconds(uint16_t frames) {
+    return (uint8_t) (mul16((int16_t) (frames + 49), 1311) >> 16);   /* frames / 50, rounded up */
+}
+
 static void update_hud(GameState *state, const GameRenderer *renderer) {
     const uint32_t high = state->high_scores[0].score;
     const uint8_t percent = hyperspace_percent(state);
+    const uint8_t shield_s = power_seconds(state->shield_timer);
+    const uint8_t rapid_s = power_seconds(state->rapid_timer);
+    const uint8_t multiplier_s = power_seconds(state->multiplier_timer);
 
     if (state->hud_score != state->score || state->hud_high != high || state->hud_lives != state->lives ||
-        state->hud_wave != state->wave || state->hud_hyperspace != percent) {
+        state->hud_wave != state->wave || state->hud_hyperspace != percent || state->hud_powers[0] != shield_s ||
+        state->hud_powers[1] != rapid_s || state->hud_powers[2] != multiplier_s) {
+        state->hud_powers[0] = shield_s;
+        state->hud_powers[1] = rapid_s;
+        state->hud_powers[2] = multiplier_s;
         state->hud_score = state->score;
         state->hud_high = high;
         state->hud_lives = state->lives;
@@ -1117,11 +1408,18 @@ void game_render(GameState *state, const GameRenderer *renderer) {
     }
 
     if (state->mode == GAME_MODE_PLAYING) {
+        draw_stars(state, renderer);
         draw_ship(state, renderer);
         draw_bullets(state, renderer);
         for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
             if (state->asteroids[index].active) {
                 draw_asteroid(state, &state->asteroids[index], renderer);
+            }
+        }
+
+        for (index = 0; index < GAME_MAX_POWERUPS; ++index) {
+            if (state->powerups[index].active) {
+                draw_powerup(state, &state->powerups[index], renderer);
             }
         }
 
