@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 300" width="1020" height="300" font-family="monospace">
+<rect width="1020" height="300" fill="#050510"/>
+<text x="170.0" y="26" fill="#ddd" font-size="15" text-anchor="middle">Current Atari port</text>
+<text x="170.0" y="46" fill="#888" font-size="11" text-anchor="middle">tip 16, base 6 ahead of centre: 10 long x 18 wide</text>
+<line x1="-6.0" y1="1.0" x2="-6.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="16.0" y1="1.0" x2="16.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="38.0" y1="1.0" x2="38.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="60.0" y1="1.0" x2="60.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="82.0" y1="1.0" x2="82.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="104.0" y1="1.0" x2="104.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="126.0" y1="1.0" x2="126.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="148.0" y1="1.0" x2="148.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="170.0" y1="1.0" x2="170.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="192.0" y1="1.0" x2="192.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="214.0" y1="1.0" x2="214.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="236.0" y1="1.0" x2="236.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="258.0" y1="1.0" x2="258.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="280.0" y1="1.0" x2="280.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="302.0" y1="1.0" x2="302.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="324.0" y1="1.0" x2="324.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="346.0" y1="1.0" x2="346.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="23.0" x2="346.0" y2="23.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="45.0" x2="346.0" y2="45.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="67.0" x2="346.0" y2="67.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="89.0" x2="346.0" y2="89.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="111.0" x2="346.0" y2="111.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="133.0" x2="346.0" y2="133.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="155.0" x2="346.0" y2="155.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="177.0" x2="346.0" y2="177.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="199.0" x2="346.0" y2="199.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="221.0" x2="346.0" y2="221.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="243.0" x2="346.0" y2="243.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="265.0" x2="346.0" y2="265.0" stroke="#1a1a2a"/>
+<line x1="-6.0" y1="287.0" x2="346.0" y2="287.0" stroke="#1a1a2a"/>
+<polygon points="324.0,155.0 214.0,56.0 214.0,254.0" fill="none" stroke="#ff6b6b" stroke-width="3" stroke-linejoin="miter"/>
+<path d="M143.0 155.0H153.0M148.0 150.0V160.0" stroke="#888"/>
+<text x="510.0" y="26" fill="#ddd" font-size="15" text-anchor="middle">Lovable original</text>
+<text x="510.0" y="46" fill="#888" font-size="11" text-anchor="middle">notched chevron, 20 long x 10 wide</text>
+<line x1="334.0" y1="1.0" x2="334.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="356.0" y1="1.0" x2="356.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="378.0" y1="1.0" x2="378.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="400.0" y1="1.0" x2="400.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="422.0" y1="1.0" x2="422.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="444.0" y1="1.0" x2="444.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="466.0" y1="1.0" x2="466.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="488.0" y1="1.0" x2="488.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="510.0" y1="1.0" x2="510.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="532.0" y1="1.0" x2="532.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="554.0" y1="1.0" x2="554.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="576.0" y1="1.0" x2="576.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="598.0" y1="1.0" x2="598.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="620.0" y1="1.0" x2="620.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="642.0" y1="1.0" x2="642.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="664.0" y1="1.0" x2="664.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="686.0" y1="1.0" x2="686.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="23.0" x2="686.0" y2="23.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="45.0" x2="686.0" y2="45.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="67.0" x2="686.0" y2="67.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="89.0" x2="686.0" y2="89.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="111.0" x2="686.0" y2="111.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="133.0" x2="686.0" y2="133.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="155.0" x2="686.0" y2="155.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="177.0" x2="686.0" y2="177.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="199.0" x2="686.0" y2="199.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="221.0" x2="686.0" y2="221.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="243.0" x2="686.0" y2="243.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="265.0" x2="686.0" y2="265.0" stroke="#1a1a2a"/>
+<line x1="334.0" y1="287.0" x2="686.0" y2="287.0" stroke="#1a1a2a"/>
+<polygon points="598.0,155.0 378.0,100.0 433.0,155.0 378.0,210.0" fill="none" stroke="#44ff44" stroke-width="3" stroke-linejoin="miter"/>
+<path d="M483.0 155.0H493.0M488.0 150.0V160.0" stroke="#888"/>
+<text x="850.0" y="26" fill="#ddd" font-size="15" text-anchor="middle">Proposed for ST</text>
+<text x="850.0" y="46" fill="#888" font-size="11" text-anchor="middle">Lovable shape x0.8: 16 long x 8 wide</text>
+<line x1="674.0" y1="1.0" x2="674.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="696.0" y1="1.0" x2="696.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="718.0" y1="1.0" x2="718.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="740.0" y1="1.0" x2="740.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="762.0" y1="1.0" x2="762.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="784.0" y1="1.0" x2="784.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="806.0" y1="1.0" x2="806.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="828.0" y1="1.0" x2="828.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="850.0" y1="1.0" x2="850.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="872.0" y1="1.0" x2="872.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="894.0" y1="1.0" x2="894.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="916.0" y1="1.0" x2="916.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="938.0" y1="1.0" x2="938.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="960.0" y1="1.0" x2="960.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="982.0" y1="1.0" x2="982.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="1004.0" y1="1.0" x2="1004.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="1026.0" y1="1.0" x2="1026.0" y2="309.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="23.0" x2="1026.0" y2="23.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="45.0" x2="1026.0" y2="45.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="67.0" x2="1026.0" y2="67.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="89.0" x2="1026.0" y2="89.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="111.0" x2="1026.0" y2="111.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="133.0" x2="1026.0" y2="133.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="155.0" x2="1026.0" y2="155.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="177.0" x2="1026.0" y2="177.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="199.0" x2="1026.0" y2="199.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="221.0" x2="1026.0" y2="221.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="243.0" x2="1026.0" y2="243.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="265.0" x2="1026.0" y2="265.0" stroke="#1a1a2a"/>
+<line x1="674.0" y1="287.0" x2="1026.0" y2="287.0" stroke="#1a1a2a"/>
+<polygon points="916.0,155.0 740.0,111.0 784.0,155.0 740.0,199.0" fill="none" stroke="#00e5ff" stroke-width="3" stroke-linejoin="miter"/>
+<path d="M823.0 155.0H833.0M828.0 150.0V160.0" stroke="#888"/>
+<text x="510.0" y="292" fill="#666" font-size="11" text-anchor="middle">heading right, same scale, + marks the ship centre (grid = 2 units)</text>
+</svg>

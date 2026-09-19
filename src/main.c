@@ -24,6 +24,7 @@ int main(int argc, char **argv) {
     PlatformConfig config;
     GameState game;
     GameInput input;
+    int steps;
 
     select_config(argc, argv, &config);
     if (!platform_init(&config)) {
@@ -44,9 +45,12 @@ int main(int argc, char **argv) {
             game_set_resolution(&game, config.width, config.height);
         }
 
-        game_step(&game, &input);
+        /* one game step per vertical blank, so the game keeps its speed when a frame takes longer */
+        for (steps = platform_take_elapsed_frames(); steps > 0; --steps) {
+            game_step(&game, &input);
+        }
         platform_begin_frame();
-        game_render(&game, NULL, platform_draw_line);
+        game_render(&game, NULL, platform_draw_line, platform_draw_polygon, platform_mark_dirty);
         platform_end_frame();
     }
 
