@@ -370,3 +370,120 @@ _st_draw_line_plane:
 	dbra	%d7,8b
 10:	movem.l	(%sp)+,%d2-%d7/%a2
 	rts
+
+| ---- Anti-aliased line runs -------------------------------------------------------------
+| A smooth line is drawn as a run of pixel pairs. For each step along the major axis the exact
+| position on the minor axis (in quarter pixels, 16.16 fixed point) picks how much of the line falls
+| on each of the two pixels it straddles:
+|     frac 0: (bright, -)   frac 1: (bright, dim)   frac 2: (dim, dim)   frac 3: (dim, bright)
+| A "dim" pixel sets one bitplane, a "bright" one sets that plane and a second, so the brighter level
+| always contains the dimmer one and OR-ing two lines together keeps the brighter (thermometer coding).
+| dim_off / extra_off are the byte offsets (0, 2, 4, 6) of those two planes within a 16-pixel group.
+| All pixels touched must be inside the screen (including the second one of each pair).
+
+| void st_aa_run_x(unsigned char *buf, long col, long count, long y_q16, long step_q16, long dim_off, long extra_off)
+| One pair per column, the pair being (col, row) and (col, row + 1). y_q16 is the quarter-pixel y of the line.
+	.globl	_st_aa_run_x
+_st_aa_run_x:
+	movem.l	%d2-%d7/%a2-%a3,-(%sp)
+	move.l	36(%sp),%a1		| buf
+	move.l	40(%sp),%d2		| col
+	move.l	44(%sp),%d5		| count
+	move.l	48(%sp),%d1		| y (16.16 quarter pixels)
+	move.l	52(%sp),%d4		| step per column
+	move.l	56(%sp),%d6		| dim plane offset
+	move.l	60(%sp),%d7		| extra plane offset
+	lea	aa_rowtab(%pc),%a2
+	move.l	%d2,%d3
+	lsr.l	#4,%d3
+	lsl.l	#3,%d3
+	add.l	%d3,%a1			| a1 = group of the first column
+	moveq	#15,%d3
+	and.l	%d2,%d3
+	move.w	#0x8000,%d0
+	lsr.w	%d3,%d0			| pixel mask
+	subq.l	#1,%d5
+	movea.l	%d4,%a3			| a3 = step
+1:	move.l	%d1,%d3
+	swap	%d3			| quarter pixels
+	move.w	%d3,%d2
+	and.w	#3,%d3			| frac
+	lsr.w	#1,%d2
+	and.w	#0xfffe,%d2		| (quarter / 4) * 2
+	move.w	0(%a2,%d2.w),%d2	| row * 160
+	lea	0(%a1,%d2.w),%a0
+	or.w	%d0,0(%a0,%d6.w)	| first pixel: at least dim
+	cmp.w	#2,%d3
+	bcc.s	2f
+	or.w	%d0,0(%a0,%d7.w)	| ... bright for frac 0 and 1
+2:	tst.w	%d3
+	beq.s	4f			| frac 0: nothing on the second pixel
+	lea	160(%a0),%a0
+	or.w	%d0,0(%a0,%d6.w)	| second pixel: at least dim
+	cmp.w	#3,%d3
+	bne.s	4f
+	or.w	%d0,0(%a0,%d7.w)	| ... bright for frac 3
+4:	add.l	%a3,%d1
+	ror.w	#1,%d0			| next column
+	bcc.s	5f
+	addq.l	#8,%a1
+5:	dbra	%d5,1b
+	movem.l	(%sp)+,%d2-%d7/%a2-%a3
+	rts
+
+| void st_aa_run_y(unsigned char *buf, long row, long count, long x_q16, long step_q16, long dim_off, long extra_off)
+| One pair per row, the pair being (col, row) and (col + 1, row). x_q16 is the quarter-pixel x of the line.
+	.globl	_st_aa_run_y
+_st_aa_run_y:
+	movem.l	%d2-%d7/%a2-%a4,-(%sp)
+	move.l	40(%sp),%a1		| buf
+	move.l	44(%sp),%d2		| row
+	move.l	48(%sp),%d5		| count
+	move.l	52(%sp),%d1		| x (16.16 quarter pixels)
+	move.l	56(%sp),%d4		| step per row
+	move.l	60(%sp),%d6		| dim plane offset
+	move.l	64(%sp),%d7		| extra plane offset
+	mulu.w	#160,%d2
+	add.l	%d2,%a1			| a1 = start of the first row
+	subq.l	#1,%d5
+	movea.l	%d4,%a3			| a3 = step
+6:	move.l	%d1,%d3
+	swap	%d3			| quarter pixels
+	move.w	%d3,%d2
+	and.w	#3,%d3			| frac
+	lsr.w	#2,%d2			| column
+	move.w	%d2,%d4
+	lsr.w	#4,%d4
+	lsl.w	#3,%d4			| byte offset of the column's group
+	lea	0(%a1,%d4.w),%a0
+	moveq	#15,%d4
+	and.w	%d4,%d2
+	move.w	#0x8000,%d0
+	lsr.w	%d2,%d0			| mask of the first pixel
+	or.w	%d0,0(%a0,%d6.w)	| first pixel: at least dim
+	cmp.w	#2,%d3
+	bcc.s	7f
+	or.w	%d0,0(%a0,%d7.w)	| ... bright for frac 0 and 1
+7:	tst.w	%d3
+	beq.s	9f			| frac 0: nothing on the second pixel
+	ror.w	#1,%d0			| second pixel: one to the right, possibly in the next group
+	bcc.s	8f
+	addq.l	#8,%a0
+8:	or.w	%d0,0(%a0,%d6.w)
+	cmp.w	#3,%d3
+	bne.s	9f
+	or.w	%d0,0(%a0,%d7.w)
+9:	add.l	%a3,%d1
+	lea	160(%a1),%a1
+	dbra	%d5,6b
+	movem.l	(%sp)+,%d2-%d7/%a2-%a4
+	rts
+
+| Row offsets: row * 160 for the 200 screen rows.
+aa_rowtab:
+	.set	aa_row,0
+	.rept	200
+	.word	aa_row
+	.set	aa_row,aa_row+160
+	.endr
+	.even
