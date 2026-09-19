@@ -27,10 +27,13 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DATARI_ST_TARGET -c $< -o $@
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
+
+# rebuild objects when a header they include changes (a stale object with an old struct layout crashes at startup)
+-include $(ATARI_OBJS:.o=.d)
 
 $(TARGET): $(ATARI_OBJS)
 	$(CC) $(CFLAGS) $(ATARI_OBJS) $(LDFLAGS) -o $@
