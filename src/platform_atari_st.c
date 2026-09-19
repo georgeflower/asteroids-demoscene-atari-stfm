@@ -8,10 +8,20 @@
 
 #define SCREEN_BYTES 32000
 #define ST_PALETTE_COLORS 16
-#define IKBD_DEVICE 4
+
+#define ST_FRCLOCK (*(volatile uint32_t *) 0x466UL)
+#define ST_HZ200 (*(volatile uint32_t *) 0x4baUL)
+#define ST_VIDEO_BASE_HIGH (*(volatile uint8_t *) 0xff8201UL)
+#define ST_VIDEO_BASE_MID (*(volatile uint8_t *) 0xff8203UL)
+#define ST_HW_PALETTE ((volatile uint16_t *) 0xff8240UL)
 
 extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
+extern void st_ikbd_install(void);
+extern void st_ikbd_remove(void);
+
+/* Written by the IKBD interrupt handler in st_ikbd.S: 1 while the key is held. */
+volatile unsigned char st_key_state[128];
 
 static unsigned char screen_storage[2][SCREEN_BYTES + 255];
 static unsigned char *screen_pages[2];
@@ -20,11 +30,11 @@ static unsigned char *show_buffer;
 static void *original_physbase;
 static void *original_logbase;
 static int original_resolution;
-static short original_palette[ST_PALETTE_COLORS];
+static uint16_t original_palette[ST_PALETTE_COLORS];
 static PlatformConfig current_config;
-static unsigned char key_state[128];
-static unsigned char ikbd_packet_remaining;
 static unsigned char previous_toggle_state;
+static long saved_ssp;
+static int entered_supervisor;
 
 static unsigned char *aligned_screen(int index) {
     unsigned long address = (unsigned long) screen_storage[index];
@@ -32,21 +42,41 @@ static unsigned char *aligned_screen(int index) {
     return (unsigned char *) address;
 }
 
+/* Wait for the next vertical blank; give up after ~50 ms so a dead VBL cannot hang the machine. */
+static void wait_vbl(void) {
+    const uint32_t frame = ST_FRCLOCK;
+    const uint32_t start = ST_HZ200;
+
+    while (ST_FRCLOCK == frame && (ST_HZ200 - start) < 10u) {
+    }
+}
+
 static void set_palette(const PlatformConfig *config) {
-    static short low_palette[ST_PALETTE_COLORS] = {
+    static const uint16_t low_palette[ST_PALETTE_COLORS] = {
         0x000, 0x777, 0x420, 0x530,
         0x640, 0x750, 0x770, 0x333,
         0x444, 0x555, 0x666, 0x222,
         0x111, 0x210, 0x431, 0x764
     };
-    static short medium_palette[ST_PALETTE_COLORS] = {
+    static const uint16_t medium_palette[ST_PALETTE_COLORS] = {
         0x000, 0x777, 0x555, 0x333,
         0x000, 0x000, 0x000, 0x000,
         0x000, 0x000, 0x000, 0x000,
         0x000, 0x000, 0x000, 0x000
     };
+    const uint16_t *palette = (config->resolution == PLATFORM_RES_MEDIUM) ? medium_palette : low_palette;
+    int i;
 
-    Setpalette((config->resolution == PLATFORM_RES_MEDIUM) ? medium_palette : low_palette);
+    for (i = 0; i < ST_PALETTE_COLORS; ++i) {
+        ST_HW_PALETTE[i] = palette[i];
+    }
+}
+
+static void show_screen(const unsigned char *buffer) {
+    const unsigned long address = (unsigned long) buffer;
+
+    ST_VIDEO_BASE_HIGH = (uint8_t) (address >> 16);
+    ST_VIDEO_BASE_MID = (uint8_t) (address >> 8);
 }
 
 static void clear_screen(void) {
@@ -58,26 +88,21 @@ static void clear_all_screens(void) {
     st_clear_buffer(screen_pages[1]);
 }
 
-static void update_key_state(unsigned char code) {
-    if (ikbd_packet_remaining > 0) {
-        --ikbd_packet_remaining;
-        return;
-    }
+/* Switch resolution through XBIOS, then take over the display registers. */
+static void enter_resolution(const PlatformConfig *config) {
+    int current = Getrez();
 
-    if (code >= 0xf6u) {
-        if (code <= 0xf7u) {
-            ikbd_packet_remaining = 5;
-        } else if (code <= 0xfbu) {
-            ikbd_packet_remaining = 2;
-        } else if (code <= 0xfdu) {
-            ikbd_packet_remaining = 6;
-        } else {
-            ikbd_packet_remaining = 1;
-        }
-        return;
+    if (current != config->resolution) {
+        Setscreen((void *) -1L, (void *) -1L, config->resolution);
+        wait_vbl();
+        wait_vbl();
     }
-
-    key_state[code & 0x7fu] = (unsigned char) ((code & 0x80u) == 0);
+    clear_all_screens();
+    show_buffer = screen_pages[0];
+    draw_buffer = screen_pages[1];
+    show_screen(show_buffer);
+    wait_vbl();
+    set_palette(config);
 }
 
 static void plot_pixel(int x, int y, uint8_t color) {
@@ -100,55 +125,76 @@ static void plot_pixel(int x, int y, uint8_t color) {
 }
 
 int platform_init(const PlatformConfig *config) {
+    static const char ikbd_game_mode[] = { 0x12, 0x1a };  /* mouse off, joysticks off */
     int i;
+
+    entered_supervisor = 0;
+    if (Super((void *) 1L) == 0) {
+        saved_ssp = Super((void *) 0L);
+        entered_supervisor = 1;
+    }
+
+    if (Getrez() == 2) {
+        (void) Cconws("Atari colour monitor required (low or medium resolution).\r\n");
+        if (entered_supervisor) {
+            (void) Super((void *) saved_ssp);
+            entered_supervisor = 0;
+        }
+        return 0;
+    }
 
     original_physbase = Physbase();
     original_logbase = Logbase();
     original_resolution = Getrez();
     for (i = 0; i < ST_PALETTE_COLORS; ++i) {
-        original_palette[i] = Setcolor(i, -1);
+        original_palette[i] = ST_HW_PALETTE[i];
     }
 
     screen_pages[0] = aligned_screen(0);
     screen_pages[1] = aligned_screen(1);
-    show_buffer = screen_pages[0];
-    draw_buffer = screen_pages[1];
     current_config = *config;
-    memset(key_state, 0, sizeof(key_state));
-    ikbd_packet_remaining = 0;
     previous_toggle_state = 0;
-    clear_all_screens();
-    Setscreen((void *) show_buffer, (void *) show_buffer, config->resolution);
-    set_palette(config);
+    memset((void *) st_key_state, 0, sizeof(st_key_state));
+
+    enter_resolution(config);
+    (void) Ikbdws(1, ikbd_game_mode);
+    st_ikbd_install();
     return 1;
 }
 
 void platform_shutdown(void) {
+    static const char ikbd_tos_mode[] = { 0x08, 0x14 };  /* relative mouse, joystick events */
     int i;
 
-    Setscreen((void *) original_logbase, (void *) original_physbase, original_resolution);
-    for (i = 0; i < ST_PALETTE_COLORS; ++i) {
-        (void) Setcolor(i, original_palette[i]);
+    if (!entered_supervisor) {
+        return;
     }
+
+    st_ikbd_remove();
+    (void) Ikbdws(1, ikbd_tos_mode);
+    Setscreen(original_logbase, original_physbase, original_resolution);
+    wait_vbl();
+    wait_vbl();
+    for (i = 0; i < ST_PALETTE_COLORS; ++i) {
+        ST_HW_PALETTE[i] = original_palette[i];
+    }
+    (void) Super((void *) saved_ssp);
+    entered_supervisor = 0;
 }
 
 void platform_poll_input(GameInput *input) {
     memset(input, 0, sizeof(*input));
 
-    while (Bconstat(IKBD_DEVICE)) {
-        update_key_state((unsigned char) (Bconin(IKBD_DEVICE) & 0xffL));
-    }
-
-    input->left = (uint8_t) (key_state[0x1eu] || key_state[0x4bu]);
-    input->right = (uint8_t) (key_state[0x20u] || key_state[0x4du]);
-    input->thrust = (uint8_t) (key_state[0x11u] || key_state[0x48u]);
-    input->fire = key_state[0x39u];
+    input->left = (uint8_t) (st_key_state[0x1eu] || st_key_state[0x4bu]);
+    input->right = (uint8_t) (st_key_state[0x20u] || st_key_state[0x4du]);
+    input->thrust = (uint8_t) (st_key_state[0x11u] || st_key_state[0x48u]);
+    input->fire = st_key_state[0x39u];
     {
-        const unsigned char toggle_state = (unsigned char) (key_state[0x32u] || key_state[0x0fu] || key_state[0x3fu]);
+        const unsigned char toggle_state = (unsigned char) (st_key_state[0x32u] || st_key_state[0x0fu] || st_key_state[0x3fu]);
         input->toggle_resolution = (uint8_t) (toggle_state && !previous_toggle_state);
         previous_toggle_state = toggle_state;
     }
-    input->exit_requested = (uint8_t) (key_state[0x10u] || key_state[0x01u]);
+    input->exit_requested = (uint8_t) (st_key_state[0x10u] || st_key_state[0x01u]);
 }
 
 void platform_begin_frame(void) {
@@ -217,15 +263,15 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
 }
 
 void platform_end_frame(void) {
-    Vsync();
-    Setscreen((void *) draw_buffer, (void *) draw_buffer, -1);
-    if (show_buffer == screen_pages[0]) {
-        show_buffer = screen_pages[1];
-        draw_buffer = screen_pages[0];
-    } else {
-        show_buffer = screen_pages[0];
-        draw_buffer = screen_pages[1];
-    }
+    unsigned char *finished = draw_buffer;
+
+    /* The ST only reloads the screen address at the vertical blank, so the old
+       page stays on screen until then: request the flip, wait for the blank that
+       carries it out, and only then draw into the page that was on screen. */
+    show_screen(finished);
+    wait_vbl();
+    draw_buffer = show_buffer;
+    show_buffer = finished;
 }
 
 int platform_cycle_resolution(PlatformConfig *config) {
@@ -240,12 +286,8 @@ int platform_cycle_resolution(PlatformConfig *config) {
     }
 
     current_config = *config;
-    show_buffer = screen_pages[0];
-    draw_buffer = screen_pages[1];
-    previous_toggle_state = 0;
-    clear_all_screens();
-    Setscreen((void *) show_buffer, (void *) show_buffer, config->resolution);
-    set_palette(config);
+    previous_toggle_state = 1;
+    enter_resolution(config);
     return 1;
 }
 

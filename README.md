@@ -10,6 +10,7 @@ This port keeps the code small and readable by splitting the project into a port
 - `src/platform_atari_st.c`: Atari ST specific video setup, raw IKBD key-state polling, palette setup, double buffering, and resolution switching
 - `src/main.c`: tiny native entry point that wires the core loop to the ST platform layer
 - `src/st_video.S`: 68000 assembly routines for screen clear and low-resolution line rendering, inspired by the structure used in `quanoid-st-src.zip`
+- `src/st_ikbd.S`: IKBD (keyboard) interrupt handler that keeps held/released state for every scan code; TOS `Bconin` only reports key presses, so the game installs its own handler on the ACIA interrupt while it runs
 
 The implementation direction was adjusted using the `Atari_ST_Sources` archive as historical reference and the `quanoid-st-src.zip` source archive in this repository as inspiration for practical ST build/runtime structure, while keeping the asteroid game logic specific to this project.
 

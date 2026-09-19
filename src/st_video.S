@@ -1,14 +1,22 @@
 	.text
 	.globl	_st_clear_buffer
 _st_clear_buffer:
-	movem.l	%d0-%d1/%a0,-(%sp)
-	move.l	16(%sp),%a0
+	movem.l	%d2-%d6/%a2,-(%sp)
+	move.l	28(%sp),%a0
+	lea	32000(%a0),%a0
 	moveq	#0,%d0
-	move.w	#7999,%d1
+	moveq	#0,%d1
+	moveq	#0,%d2
+	moveq	#0,%d3
+	moveq	#0,%d4
+	moveq	#0,%d5
+	move.l	%d0,%a1
+	move.l	%d0,%a2
+	move.w	#999,%d6		| 1000 x 32 bytes
 1:
-	move.l	%d0,(%a0)+
-	dbra	%d1,1b
-	movem.l	(%sp)+,%d0-%d1/%a0
+	movem.l	%d0-%d5/%a1-%a2,-(%a0)
+	dbra	%d6,1b
+	movem.l	(%sp)+,%d2-%d6/%a2
 	rts
 
 | Low-resolution 320x200, 4-plane line drawer.
