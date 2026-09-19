@@ -17,6 +17,12 @@ static int checks;
 
 static const GameInput no_input = {0, 0, 0, 0, 0, 0};
 
+/* Start in normal play; game_init() itself starts in the attract demo. */
+static void init_playing(GameState *state, uint16_t width, uint16_t height) {
+    game_init(state, width, height);
+    state->demo_mode = 0;
+}
+
 static int count_asteroids(const GameState *state, int size) {
     int active = 0;
     int index;
@@ -51,6 +57,7 @@ static void test_initial_wave(void) {
     CHECK(state.y_scale == 213);
     CHECK(state.wave == 1);
     CHECK(state.lives == 3);
+    CHECK(state.demo_mode == 1);   /* starts as the attract demo */
     CHECK(count_asteroids(&state, 0) == 6);
     CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 6);
     CHECK(state.ship.angle == 49152u);
@@ -62,7 +69,7 @@ static void test_wave_sizes(void) {
     int wave;
     const int expected[] = {0, 6, 8, 10, 12, 14, 16, 18, 20, 20, 20};
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     for (wave = 1; wave <= 10; ++wave) {
         memset(state.asteroids, 0, sizeof(state.asteroids));
         state.wave = (uint8_t) (wave - 1);
@@ -80,7 +87,7 @@ static void test_asteroid_shapes(void) {
     int index;
     int point;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
         const GameAsteroid *asteroid = &state.asteroids[index];
         if (!asteroid->active) {
@@ -98,7 +105,7 @@ static void test_bullet_breaks_asteroids_and_scores(void) {
     const int expected_score[] = {0, 100, 50, 20};
     int size;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
 
     for (size = GAME_ASTEROID_LARGE; size >= GAME_ASTEROID_SMALL; --size) {
         clear_field(&state);
@@ -126,7 +133,7 @@ static void test_bullet_breaks_asteroids_and_scores(void) {
 static void test_ship_wraps_across_screen(void) {
     GameState state;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     state.ship.x = -1;
     state.ship.y = -1;
 
@@ -144,7 +151,7 @@ static void test_turning_speed(void) {
     GameInput left = {1, 0, 0, 0, 0, 0};
     int frame;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     clear_field(&state);
     for (frame = 0; frame < 100; ++frame) {
         game_step(&state, &right);
@@ -166,7 +173,7 @@ static void test_thrust_and_drag(void) {
     int32_t coasting;
     int frame;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     clear_field(&state);
     state.ship.invulnerability = 255;
 
@@ -202,7 +209,7 @@ static void test_bullets(void) {
     int alive_frames = 0;
     int fired = 0;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     clear_field(&state);
     state.ship.invulnerability = 255;
 
@@ -231,7 +238,7 @@ static void test_bullets(void) {
     CHECK(alive_frames > 0);
 
     /* a single shot flies for 50 frames: 49 left after the frame it was fired */
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     clear_field(&state);
     state.ship.invulnerability = 255;
     game_step(&state, &fire);
@@ -246,10 +253,76 @@ static void test_bullets(void) {
     CHECK(!state.bullets[0].active);
 }
 
+static void test_first_key_starts_a_game_and_keeps_control(void) {
+    GameState state;
+    GameInput left = {1, 0, 0, 0, 0, 0};
+    uint16_t angle_after_turn;
+    int frame;
+    int bullets_seen = 0;
+    int index;
+
+    game_init(&state, 320, 200);
+    state.score = 500;
+    state.lives = 1;
+    CHECK(state.demo_mode == 1);
+
+    /* the attract demo plays by itself without input... */
+    for (frame = 0; frame < 30; ++frame) {
+        game_step(&state, &no_input);
+    }
+    CHECK(state.demo_mode == 1);
+    CHECK(state.ship.angle != 49152u || state.ship.vx != 0 || state.ship.vy != 0);
+
+    /* ...and the first key press starts a fresh game and hands over control */
+    game_step(&state, &left);
+    CHECK(state.demo_mode == 0);
+    CHECK(state.score == 0);
+    CHECK(state.lives == 3);
+    CHECK(state.wave == 1);
+    CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 6);
+    angle_after_turn = state.ship.angle;
+    CHECK(angle_after_turn == (uint16_t) (49152u - 626u));
+
+    /* letting go of the keys must NOT bring the autopilot back: no turning, no thrust, no shots */
+    for (frame = 0; frame < 200; ++frame) {
+        state.ship.invulnerability = 255;
+        game_step(&state, &no_input);
+        for (index = 0; index < GAME_MAX_BULLETS; ++index) {
+            bullets_seen += state.bullets[index].active;
+        }
+    }
+    CHECK(state.demo_mode == 0);
+    CHECK(state.ship.angle == angle_after_turn);
+    CHECK(state.ship.vx == 0 && state.ship.vy == 0);
+    CHECK(bullets_seen == 0);
+}
+
+static void test_game_over_returns_to_the_demo(void) {
+    GameState state;
+
+    init_playing(&state, 320, 200);
+    clear_field(&state);
+    state.score = 1234;
+    state.lives = 1;
+    state.asteroids[1] = state.asteroids[0];
+    state.asteroids[1].size = GAME_ASTEROID_LARGE;
+    state.asteroids[1].x = state.ship.x;
+    state.asteroids[1].y = state.ship.y;
+    state.ship.invulnerability = 0;
+
+    game_step(&state, &no_input);
+
+    CHECK(state.demo_mode == 1);
+    CHECK(state.lives == 3);
+    CHECK(state.score == 0);
+    CHECK(state.wave == 1);
+    CHECK(count_asteroids(&state, GAME_ASTEROID_LARGE) == 6);
+}
+
 static void test_ship_collision(void) {
     GameState state;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     clear_field(&state);
     state.asteroids[1] = state.asteroids[0];
     state.asteroids[1].size = GAME_ASTEROID_LARGE;
@@ -271,7 +344,7 @@ static void test_ship_collision(void) {
 static void test_wave_clear_advances(void) {
     GameState state;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     memset(state.asteroids, 0, sizeof(state.asteroids));
     game_step(&state, &no_input);
 
@@ -292,7 +365,7 @@ static void test_asteroid_speeds_scale_with_wave(void) {
         int rocks = 0;
         int round;
 
-        game_init(&state, 320, 200);
+        init_playing(&state, 320, 200);
         for (round = 0; round < 6; ++round) {
             memset(state.asteroids, 0, sizeof(state.asteroids));
             state.wave = (uint8_t) (wave - 1);
@@ -338,7 +411,7 @@ static void test_render(void) {
     GameState state;
     GameInput thrust = {0, 0, 1, 0, 0, 0};
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     state.ship.invulnerability = 0;
 
     line_count = 0;
@@ -395,7 +468,7 @@ static void test_ship_is_long_and_narrow(void) {
     GameState state;
 
     /* 320x240 has square pixels, so screen extents equal world extents */
-    game_init(&state, 320, 240);
+    init_playing(&state, 320, 240);
     memset(state.asteroids, 0, sizeof(state.asteroids));
     state.ship.invulnerability = 0;
 
@@ -481,7 +554,7 @@ static void test_dirty_rects_cover_everything_drawn(void) {
         GameState state;
         int frame;
 
-        game_init(&state, widths[variant], 200);
+        init_playing(&state, widths[variant], 200);
         for (frame = 0; frame < 600; ++frame) {
             GameInput input = {0, 0, 0, 0, 0, 0};
             input.thrust = (uint8_t) ((frame / 40) & 1);
@@ -505,7 +578,7 @@ static void test_render_cache_is_reused(void) {
     int8_t first_x[GAME_MAX_ASTEROID_POINTS];
     int frame;
 
-    game_init(&state, 320, 200);
+    init_playing(&state, 320, 200);
     memset(state.asteroids, 0, sizeof(state.asteroids));
     game_step(&state, &no_input);
     state.wave = 1;
@@ -554,6 +627,8 @@ int main(void) {
     test_turning_speed();
     test_thrust_and_drag();
     test_bullets();
+    test_first_key_starts_a_game_and_keeps_control();
+    test_game_over_returns_to_the_demo();
     test_ship_collision();
     test_wave_clear_advances();
     test_asteroid_speeds_scale_with_wave();

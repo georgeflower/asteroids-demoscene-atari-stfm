@@ -19,7 +19,7 @@ ATARI_ASMS := $(SRC_DIR)/st_video.S $(SRC_DIR)/st_ikbd.S
 ATARI_OBJS := $(ATARI_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o) $(ATARI_ASMS:$(SRC_DIR)/%.S=$(BUILD_DIR)/%.o)
 TEST_SRCS := $(TEST_DIR)/game_tests.c $(SRC_DIR)/game.c
 
-.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-medium-atari bench-atari host-sanity clean
+.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-medium-atari test-keys-atari bench-atari host-sanity clean
 
 all: atari-st disk-image
 
@@ -60,6 +60,10 @@ test-gfx-atari: $(BUILD_DIR)
 # Medium-resolution smoke test (run in Hatari).
 test-medium-atari: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_medium_test.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/MEDTEST.PRG
+
+# Keyboard diagnostic: logs which keys reach the game (run in Hatari, read C:\KEYTEST.LOG).
+test-keys-atari: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_key_test.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/KEYTEST.PRG
 
 # Frame-cost benchmark (run in Hatari): game step + clear + render for a few wave sizes.
 bench-atari: $(BUILD_DIR)

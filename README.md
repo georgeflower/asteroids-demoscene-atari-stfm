@@ -37,7 +37,7 @@ The implementation direction was adjusted using the `Atari_ST_Sources` archive a
 - `M`, `Tab`, or `F5`: switch between 320x200 and 640x200 modes
 - `Esc` or `Q`: quit
 
-If no manual control is used, the ship falls back to a small attract/demo autopilot so the program still behaves like a self-running demoscene display.
+The game starts as an attract demo: an autopilot plays by itself until you press a key. The first key press starts a real game (3 lives, wave 1) and you stay in control; letting go of the keys does not bring the autopilot back. When you lose your last life the game returns to the attract demo.
 
 ## Building
 

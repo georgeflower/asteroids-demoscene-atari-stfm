@@ -426,6 +426,17 @@ static void resolve_bullet_collisions(GameState *state) {
     }
 }
 
+/* Fresh game: score, lives, wave and playfield reset (the random generator carries on). */
+static void start_new_game(GameState *state) {
+    state->score = 0;
+    state->wave = 1;
+    state->lives = 3;
+    memset(state->asteroids, 0, sizeof(state->asteroids));
+    memset(state->bullets, 0, sizeof(state->bullets));
+    reset_ship(state);
+    spawn_wave(state);
+}
+
 static void resolve_ship_collisions(GameState *state) {
     int asteroid_index;
 
@@ -445,12 +456,9 @@ static void resolve_ship_collisions(GameState *state) {
             }
             reset_ship(state);
             if (state->lives == 0) {
-                state->score = 0;
-                state->wave = 1;
-                memset(state->asteroids, 0, sizeof(state->asteroids));
-                memset(state->bullets, 0, sizeof(state->bullets));
-                state->lives = 3;
-                spawn_wave(state);
+                /* game over: back to the attract screen, where the autopilot plays until a key is pressed */
+                start_new_game(state);
+                state->demo_mode = 1;
             }
             break;
         }
@@ -494,12 +502,16 @@ void game_step(GameState *state, const GameInput *input) {
     GameInput effective_input;
     ++state->frame;
 
-    if (any_manual_input(input)) {
-        effective_input = *input;
+    if (state->demo_mode && any_manual_input(input)) {
+        /* the first key press ends the attract demo and starts a real game */
+        start_new_game(state);
         state->demo_mode = 0;
-    } else {
+    }
+
+    if (state->demo_mode) {
         select_demo_input(state, &effective_input);
-        state->demo_mode = 1;
+    } else {
+        effective_input = *input;
     }
 
     update_ship(state, &effective_input);
