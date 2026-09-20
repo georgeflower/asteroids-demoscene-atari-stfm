@@ -227,6 +227,46 @@ static int find_free_asteroid(GameState *state) {
     return -1;
 }
 
+/* The shared rock outlines: GAME_ROCK_SHAPES per size, made once from a fixed seed with the same recipe as
+   the old per-rock random outlines (8-11 corners, radii within 20% of the size's radius). */
+static struct {
+    uint8_t point_count;
+    uint8_t radius[GAME_MAX_ASTEROID_POINTS];
+} rock_shapes[4][GAME_ROCK_SHAPES];
+static int rock_shapes_ready;
+
+static void ensure_rock_shapes(void) {
+    uint32_t seed = 0x2545f491u;
+    int size;
+    int shape;
+    int index;
+
+    if (rock_shapes_ready) {
+        return;
+    }
+    for (size = GAME_ASTEROID_SMALL; size <= GAME_ASTEROID_LARGE; ++size) {
+        for (shape = 0; shape < GAME_ROCK_SHAPES; ++shape) {
+            seed = seed * 1103515245u + 12345u;
+            rock_shapes[size][shape].point_count = (uint8_t) (8 + ((seed >> 16) & 3));
+            for (index = 0; index < rock_shapes[size][shape].point_count; ++index) {
+                seed = seed * 1103515245u + 12345u;
+                rock_shapes[size][shape].radius[index] =
+                    (uint8_t) ((asteroid_radius_table[size] * (205 + ((seed >> 16) & 0x7fffu) % 103)) >> 8);
+            }
+        }
+    }
+    rock_shapes_ready = 1;
+}
+
+void game_rock_shape(int size, int shape, GameAsteroid *out) {
+    ensure_rock_shapes();
+    memset(out, 0, sizeof(*out));
+    out->size = (uint8_t) size;
+    out->shape = (uint8_t) (shape + 1);
+    out->point_count = rock_shapes[size][shape].point_count;
+    memcpy(out->radius, rock_shapes[size][shape].radius, sizeof(out->radius));
+}
+
 static void spawn_asteroid(GameState *state, uint8_t size, int32_t x, int32_t y) {
     GameAsteroid *asteroid;
     const int slot = find_free_asteroid(state);
@@ -251,6 +291,20 @@ static void spawn_asteroid(GameState *state, uint8_t size, int32_t x, int32_t y)
     for (index = 0; index < asteroid->point_count; ++index) {
         /* radius +-20% */
         asteroid->radius[index] = (uint8_t) ((base_radius * (205 + game_rand_below(state, 103))) >> 8);
+    }
+    {
+        /* the random outline above only decides which of the shared outlines this rock gets (so the random
+           sequence of the game is what it always was) */
+        unsigned hash = asteroid->point_count;
+        GameAsteroid shared;
+
+        for (index = 0; index < asteroid->point_count; ++index) {
+            hash = hash * 3u + asteroid->radius[index];
+        }
+        game_rock_shape(size, (int) (hash & (GAME_ROCK_SHAPES - 1)), &shared);
+        asteroid->shape = shared.shape;
+        asteroid->point_count = shared.point_count;
+        memcpy(asteroid->radius, shared.radius, sizeof(asteroid->radius));
     }
     asteroid->angle = game_rand16(state);
     asteroid->spin = (int16_t) (game_rand_below(state, 501) - 250);
@@ -1854,7 +1908,11 @@ static void rebuild_asteroid_cache(const GameState *state, GameAsteroid *asteroi
 }
 
 void game_prepare_rock(const GameState *state, GameAsteroid *asteroid) {
-    const uint8_t orientation = (uint8_t) (asteroid->angle >> 10);
+    uint8_t orientation = (uint8_t) (asteroid->angle >> 10);
+
+    if (asteroid->shape != 0) {
+        orientation &= GAME_ROCK_ORIENT_MASK;   /* shared outlines turn in coarser steps */
+    }
 
     if (!asteroid->cache_valid || asteroid->cache_index != orientation) {
         rebuild_asteroid_cache(state, asteroid, orientation);

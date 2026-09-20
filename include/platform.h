@@ -25,6 +25,12 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color);
 void platform_draw_polygon_offsets(void *context, int center_x, int center_y, const int8_t *off_x,
                                    const int8_t *off_y, int count, uint8_t color, void *cache, uint8_t *cache_valid);
+/* Prepare the pre-drawn rocks for the field of this game state (call once after game_init); until then, and for
+   rocks with an outline of their own, platform_draw_rocks uses the line drawer. Returns nothing; the memory the
+   generated routines use is reported by platform_rock_sprite_bytes(). */
+void platform_build_rock_sprites(const GameState *state);
+unsigned long platform_rock_sprite_bytes(void);
+
 /* All the rocks that lie inside the field, in assembly (see GameRocksDrawer in game.h). */
 void platform_draw_rocks(void *context, GameState *state);
 

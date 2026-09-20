@@ -38,6 +38,10 @@ void layout(void) {
     DEF(GA_DRAW_CACHE_VALID, offsetof(GameAsteroid, draw_cache_valid));
     DEF(GA_DRAW_CACHE, offsetof(GameAsteroid, draw_cache));
     DEF(GA_RENDER_PENDING, offsetof(GameAsteroid, render_pending));
+    DEF(GA_SHAPE, offsetof(GameAsteroid, shape));
+    DEF(ROCK_SHAPE_BITS, GAME_ROCK_SHAPE_BITS);
+    DEF(ROCK_ORIENT_BITS, GAME_ROCK_ORIENT_BITS);
+    DEF(ROCK_ORIENT_MASK, GAME_ROCK_ORIENT_MASK);
     DEF(GA_VX, offsetof(GameAsteroid, vx));
     DEF(GA_VY, offsetof(GameAsteroid, vy));
     DEF(GA_SPIN, offsetof(GameAsteroid, spin));

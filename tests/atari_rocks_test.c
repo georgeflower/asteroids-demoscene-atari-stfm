@@ -118,6 +118,16 @@ int main(void) {
     via_asm = via_c;
     via_asm.rocks = platform_draw_rocks;
 
+    game_init(&base, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
+    {
+        const unsigned long start = *(volatile unsigned long *) 0x4baUL;
+
+        platform_build_rock_sprites(&base);
+        sprintf(text, "rock sprites: %lu bytes of generated code, built in %lu ms", platform_rock_sprite_bytes(),
+                (*(volatile unsigned long *) 0x4baUL - start) * 5UL);
+    }
+    log_line(text);
+
     for (trial = 0; trial < 400; ++trial) {
         const int rocks = 1 + (int) rand_below(GAME_MAX_ASTEROIDS);
         int slot;
@@ -140,6 +150,15 @@ int main(void) {
             rock->point_count = (uint8_t) (8 + rand_below(4));
             for (index = 0; index < rock->point_count; ++index) {
                 rock->radius[index] = (uint8_t) ((radius_of[rock->size] * (205 + rand_below(103))) >> 8);
+            }
+            if (rand_below(4) != 0) {
+                /* most rocks have one of the shared outlines, which the assembly draws from pre-drawn routines */
+                GameAsteroid shared;
+
+                game_rock_shape(rock->size, (int) rand_below(GAME_ROCK_SHAPES), &shared);
+                rock->shape = shared.shape;
+                rock->point_count = shared.point_count;
+                memcpy(rock->radius, shared.radius, sizeof(rock->radius));
             }
             /* a third of them hug the edges of the world, where the outline pokes out of the field */
             if (rand_below(3) == 0) {

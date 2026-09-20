@@ -123,7 +123,7 @@ static int count_rocks(const GameState *state) {
 
 /* Rock populations: how many large, medium and small rocks. The first is a fresh early wave, the second what
    a level 4 looks like a while in, the third a crowded late one, the last twelve large ones (the worst case). */
-static const int scenarios[4][3] = {{6, 0, 0}, {4, 8, 12}, {6, 10, 24}, {12, 0, 0}};
+static const int scenarios[4][3] = {{6, 0, 0}, {4, 8, 12}, {5, 8, 14}, {12, 0, 0}};
 /* the last scenario keeps every rock within a few pixels of the edge of the world, where they poke out of the field */
 #define BORDER_SCENARIO 3
 static uint32_t lcg = 777;
@@ -139,18 +139,24 @@ static void make_rock(GameState *state, int slot, int size, const GameAsteroid *
     GameAsteroid *rock = &state->asteroids[slot];
     int index;
 
+    GameAsteroid shared;
+
     *rock = *model;
     rock->size = (uint8_t) size;
+    game_rock_shape(size, lcg_below(GAME_ROCK_SHAPES), &shared);
+    rock->shape = shared.shape;
+    rock->point_count = shared.point_count;
+    memcpy(rock->radius, shared.radius, sizeof(rock->radius));
     rock->x = (int32_t) (at_border ? (lcg_below(2) ? lcg_below(12) : 308 + lcg_below(12)) : 30 + lcg_below(260)) << GAME_FIX_SHIFT;
     rock->y = (int32_t) (at_border ? lcg_below(240) : 30 + lcg_below(180)) << GAME_FIX_SHIFT;
     rock->vx = at_border ? 0 : (int32_t) (lcg_below(60000) - 30000);   /* border rocks stay where they are */
     rock->vy = at_border ? 0 : (int32_t) (lcg_below(60000) - 30000);
     rock->angle = (uint16_t) lcg_below(65535);
     rock->spin = (int16_t) (lcg_below(500) - 250);
-    for (index = 0; index < rock->point_count; ++index) {
-        rock->radius[index] = (uint8_t) ((model->radius[index] * radius_scale[size]) / 16);
-    }
+    (void) index;
+    (void) radius_scale;
     rock->cache_valid = 0;
+    rock->draw_cache_valid = 0;
 }
 
 int main(void) {
@@ -164,6 +170,8 @@ int main(void) {
     if (!platform_init()) {
         return 1;
     }
+    game_init(&state, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
+    platform_build_rock_sprites(&state);
 
     for (wave_index = 0; wave_index < 4; ++wave_index) {
         game_init(&state, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);

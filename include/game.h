@@ -14,9 +14,16 @@
  * frame.  Angles are 16-bit: 65536 is one full turn, 0 points right, and
  * increasing angles turn clockwise on screen (y grows downwards).
  */
-#define GAME_MAX_ASTEROIDS 40
+#define GAME_MAX_ASTEROIDS 27   /* as many as the arcade original allowed */
 #define GAME_MAX_BULLETS 12
 #define GAME_MAX_ASTEROID_POINTS 11
+/* Rocks share a small set of outlines per size (as in the arcade original), so a drawer can prepare each one
+   ahead of time. The rock turns through 1 << GAME_ROCK_ORIENT_BITS steps of the 64 the game knows; 0 means it
+   keeps one orientation. */
+#define GAME_ROCK_SHAPES 8
+#define GAME_ROCK_SHAPE_BITS 3
+#define GAME_ROCK_ORIENT_BITS 0
+#define GAME_ROCK_ORIENT_MASK (0x3f & ~((1 << (6 - GAME_ROCK_ORIENT_BITS)) - 1))
 #define GAME_DRAW_CACHE_WORDS (3 + 6 * GAME_MAX_ASTEROID_POINTS)   /* room the platform may use per rock */
 #define GAME_MAX_POWERUPS 4
 #define GAME_MAX_ENEMIES 12
@@ -122,6 +129,7 @@ typedef struct GameAsteroid {
     uint8_t cache_index;
     uint8_t cache_valid;
     uint8_t draw_count;  /* vertices of the cached outline (small rocks are drawn with fewer) */
+    uint8_t shape;       /* 1 + the index of the shared outline it has (see game_rock_shape), 0 = its own outline */
     uint8_t render_pending;                         /* set by a rocks drawer for rocks it left to game_render */
     uint8_t draw_cache_valid;                       /* the platform's own prepared form of the outline, below */
     uint16_t draw_cache[GAME_DRAW_CACHE_WORDS];
@@ -339,6 +347,9 @@ void st_update_bullets(GameState *state);
 /* reach: per rock size the largest 12.4 distance for a hit; returns the bullet index or -1, and the rock in *rock */
 long st_find_bullet_hit(const GameState *state, long first_bullet, const uint16_t *reach, long *rock);
 #endif
+
+/* The shared outline `shape` (0 .. GAME_ROCK_SHAPES - 1) of a rock size: fills size, shape, point_count and radius. */
+void game_rock_shape(int size, int shape, GameAsteroid *out);
 
 /* For renderers that draw rocks themselves: rebuild the rock's cached outline if its orientation changed. */
 void game_prepare_rock(const GameState *state, GameAsteroid *asteroid);

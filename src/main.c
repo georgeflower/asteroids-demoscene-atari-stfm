@@ -41,6 +41,10 @@ int main(void) {
 
     sound_init(platform_sound_write);
     game_init(&game, PLATFORM_FIELD_X, PLATFORM_FIELD_Y, PLATFORM_FIELD_WIDTH, PLATFORM_FIELD_HEIGHT);
+    /* the pre-drawn rocks take a second or two to prepare */
+    platform_draw_text(NULL, 88, 96, "PREPARING ROCKS", GAME_COLOR_WHITE, GAME_COLOR_BLACK, 1);
+    platform_end_frame();
+    platform_build_rock_sprites(&game);
     if (platform_load_scores(score_file, (int) sizeof(score_file)) == (int) sizeof(score_file)) {
         (void) game_scores_unpack(&game, score_file);
     }

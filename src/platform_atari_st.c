@@ -54,7 +54,7 @@ typedef struct DirtyRect {
     short y1;
 } DirtyRect;
 
-extern void st_draw_rocks(GameState *state, unsigned char *buffer, DirtyRect *rects, int *count, unsigned char *full, long max_rects);
+extern void st_draw_rocks(GameState *state, unsigned char *buffer, DirtyRect *rects, int *count, unsigned char *full, long max_rects, uint16_t *const *sprites);
 
 static unsigned char screen_storage[2][SCREEN_BYTES + 255];
 static unsigned char *screen_pages[2];
@@ -236,11 +236,88 @@ void platform_clear_field(void *context) {
     st_clear_rect(draw_buffer, FIELD_GROUP0, FIELD_GROUP1, FIELD_Y0, FIELD_Y1);
 }
 
+/* ---- pre-drawn rocks ----
+ * For every (size, shared shape, orientation, x offset within a 16-pixel group) the outline is drawn once into a
+ * scratch bitmap, and a tiny routine is generated that ORs exactly the words the outline touches into the
+ * screen: `ori.w #mask,offset(a0)` per word, then rts. Drawing a rock is then a jsr to one of these. */
+#define SPRITE_ORIENTS (1 << GAME_ROCK_ORIENT_BITS)
+#define SPRITE_COUNT (3 * GAME_ROCK_SHAPES * SPRITE_ORIENTS * 16)
+#define SPRITE_ROWS 48
+#define SPRITE_CENTER_ROW 24
+#define SPRITE_CENTER_X 32
+#define SPRITE_POOL_WORDS (0x10000UL << GAME_ROCK_ORIENT_BITS)
+
+static uint16_t *rock_sprites[SPRITE_COUNT];
+static int rock_sprites_ready;
+static unsigned long rock_sprite_words;
+static uint16_t rock_code_pool[SPRITE_POOL_WORDS];
+static uint16_t sprite_scratch[SPRITE_ROWS * 80];
+
+void platform_build_rock_sprites(const GameState *state) {
+    uint16_t *out = rock_code_pool;
+    uint16_t *const limit = rock_code_pool + SPRITE_POOL_WORDS;
+    int size;
+    int shape;
+    int orient;
+    int phase;
+
+    memset(rock_sprites, 0, sizeof(rock_sprites));
+    for (size = GAME_ASTEROID_SMALL; size <= GAME_ASTEROID_LARGE; ++size) {
+        for (shape = 0; shape < GAME_ROCK_SHAPES; ++shape) {
+            for (orient = 0; orient < SPRITE_ORIENTS; ++orient) {
+                GameAsteroid rock;
+
+                game_rock_shape(size, shape, &rock);
+                rock.angle = (uint16_t) ((orient << (6 - GAME_ROCK_ORIENT_BITS)) << 10);
+                game_prepare_rock(state, &rock);
+                for (phase = 0; phase < 16; ++phase) {
+                    const int index = ((((size - 1) * GAME_ROCK_SHAPES + shape) * SPRITE_ORIENTS + orient) << 4) + phase;
+                    short points[GAME_MAX_ASTEROID_POINTS * 2];
+                    int vertex;
+                    int row;
+                    int group;
+
+                    for (vertex = 0; vertex < rock.draw_count; ++vertex) {
+                        points[vertex * 2] = (short) (SPRITE_CENTER_X + phase + rock.off_x[vertex]);
+                        points[vertex * 2 + 1] = (short) (SPRITE_CENTER_ROW + rock.off_y[vertex]);
+                    }
+                    st_clear_rect((unsigned char *) sprite_scratch, 0, 4, 0, SPRITE_ROWS - 1);
+                    st_draw_poly_plane((unsigned char *) sprite_scratch, points, rock.draw_count, 0);
+
+                    if ((unsigned long) (limit - out) < 3UL * SPRITE_ROWS * 5 + 1) {
+                        continue;   /* out of room: this one stays on the line drawer */
+                    }
+                    rock_sprites[index] = out;
+                    for (row = SPRITE_CENTER_ROW + rock.bound_y0; row <= SPRITE_CENTER_ROW + rock.bound_y1; ++row) {
+                        for (group = 0; group < 5; ++group) {
+                            const uint16_t word = sprite_scratch[row * 80 + group * 4];
+
+                            if (word != 0) {
+                                *out++ = 0x0068;   /* ori.w #imm,d16(a0) */
+                                *out++ = word;
+                                *out++ = (uint16_t) ((row - SPRITE_CENTER_ROW) * 160 + (group - SPRITE_CENTER_X / 16) * 8);
+                            }
+                        }
+                    }
+                    *out++ = 0x4e75;   /* rts */
+                }
+            }
+        }
+    }
+    rock_sprite_words = (unsigned long) (out - rock_code_pool);
+    rock_sprites_ready = 1;
+}
+
+unsigned long platform_rock_sprite_bytes(void) {
+    return rock_sprite_words * 2UL;
+}
+
 void platform_draw_rocks(void *context, GameState *state) {
     const int page = page_index();
 
     (void) context;
-    st_draw_rocks(state, draw_buffer, dirty_rects[page], &dirty_count[page], &dirty_full[page], MAX_DIRTY_RECTS);
+    st_draw_rocks(state, draw_buffer, dirty_rects[page], &dirty_count[page], &dirty_full[page], MAX_DIRTY_RECTS,
+                  rock_sprites_ready ? rock_sprites : NULL);
 }
 
 int platform_dirty_count(void) {
