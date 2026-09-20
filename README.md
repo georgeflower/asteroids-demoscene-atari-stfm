@@ -18,7 +18,7 @@ This port keeps the code small and readable by splitting the project into a port
 
 The ship uses a notched chevron, asteroids are jagged 8-11 sided rocks that split large -> medium -> small, and scoring is 20 / 50 / 100. Turn speed, thrust, drift, rock generation, ship collision, and wave progression follow classic arcade-style rules.
 
-Also ported:
+Included gameplay features:
 
 - **Power-ups** (15% of destroyed rocks and enemies drop one): shield (5 s, drawn as a ring), rapid fire (10 s), extra life and double score (15 s). Icons are an octagon with a square, two bars, a plus sign, and a diamond
 - **UFOs**: large ones fire in random directions, small ones (from wave 7) aim at you; 200 / 1000 points, and their warble plays while one is on screen.
@@ -27,9 +27,7 @@ Also ported:
 - **Starfield**: 18 stars in three depth layers drifting at parallax speeds.
 - **Sound** on the YM2149: shots, three explosion sizes, ship death, power-up, extra life, hyperspace, enemy shots, boss hits, game over and wave jingles, engine rumble and UFO warble.
 
-Not ported: chain combos, particles, color themes, multiplayer, and the online score system.
-
-The implementation direction was adjusted using the `Atari_ST_Sources` archive as historical reference and the `quanoid-st-src.zip` source archive in this repository as inspiration for practical ST-specific performance and compatibility work.
+Not included: chain combos, particles, color themes, multiplayer, and the online score system.
 
 ## Atari ST target
 
@@ -55,7 +53,7 @@ Keyboard, and a joystick in either joystick port (the ST reports them through th
 | menu up / down | `W` / `S`, up / down arrow | up / down |
 
 - `Esc` during a game pauses it and shows PAUSED in big blocky letters. On the pause screen `Space` (or the button) continues and `Esc` again goes back to the main menu.
-- `Esc` on the main menu quits to the desktop (`Q` no longer does).
+- `Esc` on the main menu quits to the desktop.
 - The main menu shows the high score list. Below it is the one setting: **HYPERSPACE KEY: H / SPACE**. Move down to it with the down arrow (or joystick down) and press fire or left/right to change it.
 - `F1`: switch the frame pacing (steady / free) on and off.
 - Entering initials for a high score: type letters on the keyboard (`Backspace` goes back, `Return` accepts), or use left/right to change the letter and fire to accept.
@@ -106,22 +104,22 @@ make test-keys-atari    # build/KEYTEST.PRG: logs which keys reach the game (C:\
 
 `make test` builds the game-logic tests for the host machine instead, if you have a host C compiler.
 
-Performance measured in Hatari (cycle-exact 8 MHz ST, TOS 1.04) with `make bench-atari`: full game step + erase + render, ms per frame (20 ms = 50 fps, 40 ms = 25 fps). Rocks are placed at random and the results are stable enough to highlight hot loops and tuning changes.
+Performance measured in Hatari (cycle-exact 8 MHz ST, TOS 1.04) with `make bench-atari`: full game step + erase + render, ms per frame (20 ms = 50 fps, 40 ms = 25 fps). Rocks are placed at random and the results are stable enough to highlight the main hot loops.
 
 | rocks | ms/frame |
 |---|---|
-| 6 large (start of a game) | 10 (22 before any speed-up, 15 with the assembly loop) |
-| 4 large, 8 medium, 12 small (a level 4 a while in) | 15.5 (34, 27) |
+| 6 large (start of a game) | 10 |
+| 4 large, 8 medium, 12 small (a level 4 a while in) | 15.5 |
 | 5 large, 8 medium, 14 small (27 rocks, the most there can be) | 19 |
 | 12 large, all poking out over the border | 31 |
 
-Bosses, without rocks (`make boss-bench-atari`): 20-27 ms, were 26-36 ms.
+Bosses, without rocks (`make boss-bench-atari`): 20-27 ms.
 
 A frame that takes more than 20 ms is shown for two vertical blanks (25 fps). To keep that from flapping between 50 and 25 fps when the load sits near the limit, the number of blanks per frame is adjusted by the pacing logic.
 
-Rocks are drawn like the arcade original: each size has 8 shared outlines (`game_rock_shape`) and they no longer spin (`GAME_ROCK_ORIENT_BITS` in `game.h` allows coarse rotation steps if you want to adjust the look).
+Rocks are drawn like the arcade original: each size has 8 shared outlines (`game_rock_shape`) and they do not spin (`GAME_ROCK_ORIENT_BITS` in `game.h` allows coarse rotation steps if you want to adjust the look).
 
-Other speed-ups: a polygon drawer that carries on from the previous edge instead of setting each edge up again; rocks prepared once per orientation (edge list in `GameAsteroid.draw_cache`, drawn through the platform-level render hook), and a faster assembly loop for the most expensive parts.
+The renderer uses a polygon drawer that carries on from the previous edge instead of setting each edge up again, prepares rocks once per orientation (edge list in `GameAsteroid.draw_cache`, drawn through the platform-level render hook), and uses an assembly loop for the most expensive parts.
 
 The per-rock render loop is in assembly (`src/st_rocks.S`, called through the optional `GameRenderer.rocks` hook): it works out each rock's screen position, keeps its cached outline up to date, and renders a clipped rock outline with the same visible shapes expected by the original design.
 
@@ -160,12 +158,11 @@ The script uses either:
 - 1 MB STFM class memory budget
 - TOS-compatible startup/runtime environment
 - Native ST low resolution planar framebuffer layout
-- Keyboard-only input through IKBD scan codes
+- IKBD-driven keyboard state plus joystick input from either joystick port
 
 ### Limitations
 
-- The port is intentionally minimal: no sound yet, no GEM UI, joystick layer, or original asset pipeline
+- The port is intentionally minimal: no GEM UI, no multiplayer, no online score system, and no original asset pipeline
 - Hatari/TOS ROMs are not bundled here
-- The original upstream project could not be diffed directly from this sandbox, so gameplay preservation is based on a reasonable Asteroids-style adaptation instead of verified one-to-one behavior
 - The code targets the 320x200 ST low resolution mode; STFM hardware does not provide an 8-bit chunky framebuffer, so color usage stays within native ST planar limits (16 colours)
 - Validation in this environment covers the portable game logic plus native artifact creation; sustained play-testing still needs real STFM hardware or Hatari with a TOS ROM
