@@ -1,4 +1,4 @@
-# Quanoid-atari-stfm
+# Asteroids-atari-stfm
 
 Native Atari STFM 1040 adaptation of an asteroid-action DemoScene project, targeted first at real 68000 hardware and secondarily at the Hatari emulator.
 
