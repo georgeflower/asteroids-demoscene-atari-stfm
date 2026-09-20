@@ -79,7 +79,9 @@ static uint32_t run(GameState *state, int mode) {
     full.clear_field = platform_clear_field;
     full.points = platform_draw_points;
     full.polygon_offsets = platform_draw_polygon_offsets;
+#ifndef BENCH_C_ROUTE
     full.rocks = platform_draw_rocks;
+#endif
 
     memset(&input, 0, sizeof(input));
     input.left = 1;   /* manual input: measures the game itself */
@@ -122,6 +124,8 @@ static int count_rocks(const GameState *state) {
 /* Rock populations: how many large, medium and small rocks. The first is a fresh early wave, the second what
    a level 4 looks like a while in, the third a crowded late one, the last twelve large ones (the worst case). */
 static const int scenarios[4][3] = {{6, 0, 0}, {4, 8, 12}, {6, 10, 24}, {12, 0, 0}};
+/* the last scenario keeps every rock within a few pixels of the edge of the world, where they poke out of the field */
+#define BORDER_SCENARIO 3
 static uint32_t lcg = 777;
 
 static int lcg_below(int limit) {
@@ -130,17 +134,17 @@ static int lcg_below(int limit) {
 }
 
 /* Turn the rock in slot `slot` into one of the given size at a random place (radii scaled from the large ones). */
-static void make_rock(GameState *state, int slot, int size, const GameAsteroid *model) {
+static void make_rock(GameState *state, int slot, int size, const GameAsteroid *model, int at_border) {
     static const int radius_scale[4] = {0, 5, 10, 16};
     GameAsteroid *rock = &state->asteroids[slot];
     int index;
 
     *rock = *model;
     rock->size = (uint8_t) size;
-    rock->x = (int32_t) (30 + lcg_below(260)) << GAME_FIX_SHIFT;
-    rock->y = (int32_t) (30 + lcg_below(180)) << GAME_FIX_SHIFT;
-    rock->vx = (int32_t) (lcg_below(60000) - 30000);
-    rock->vy = (int32_t) (lcg_below(60000) - 30000);
+    rock->x = (int32_t) (at_border ? (lcg_below(2) ? lcg_below(12) : 308 + lcg_below(12)) : 30 + lcg_below(260)) << GAME_FIX_SHIFT;
+    rock->y = (int32_t) (at_border ? lcg_below(240) : 30 + lcg_below(180)) << GAME_FIX_SHIFT;
+    rock->vx = at_border ? 0 : (int32_t) (lcg_below(60000) - 30000);   /* border rocks stay where they are */
+    rock->vy = at_border ? 0 : (int32_t) (lcg_below(60000) - 30000);
     rock->angle = (uint16_t) lcg_below(65535);
     rock->spin = (int16_t) (lcg_below(500) - 250);
     for (index = 0; index < rock->point_count; ++index) {
@@ -179,7 +183,7 @@ int main(void) {
             memset(state.asteroids, 0, sizeof(state.asteroids));
             for (size = GAME_ASTEROID_LARGE; size >= GAME_ASTEROID_SMALL; --size) {
                 for (made = 0; made < scenarios[wave_index][GAME_ASTEROID_LARGE - size] && slot < GAME_MAX_ASTEROIDS; ++made) {
-                    make_rock(&state, slot++, size, &model);
+                    make_rock(&state, slot++, size, &model, wave_index == BORDER_SCENARIO);
                 }
             }
             state.ufo_timer = 30000;

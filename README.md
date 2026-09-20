@@ -101,16 +101,17 @@ Performance measured in Hatari (cycle-exact 8 MHz ST, TOS 1.04) with `make bench
 
 | rocks | ms/frame |
 |---|---|
-| 6 large (start of a game) | 16 |
-| 12 large (worst case for size) | 27 (was 36 before the speed-ups) |
-| 4 large, 8 medium, 12 small (a level 4 a while in) | 30 (34 with the C rock loop) |
-| 6 large, 10 medium, 24 small (crowded, 40 rocks) | 45 (53) |
+| 6 large (start of a game) | 15 (22 before any speed-up) |
+| 12 large (worst case for size) | 24 (36) |
+| 4 large, 8 medium, 12 small (a level 4 a while in) | 27 (34 with the C rock loop and drawing) |
+| 6 large, 10 medium, 24 small (crowded, 40 rocks) | 41 (53) |
+| 12 large, all poking out over the border | 34 (37 with the C border route) |
 
 The frame is drawn once per two blanks whenever it takes more than 20 ms, so the early waves run at 50 fps, busier ones at 25 fps and the very crowded ones at 17 fps; the game keeps its speed by stepping once per elapsed blank. What the time goes to (from the profiler): drawing the rock outlines (about 45 %), erasing the old ones, the per-rock render maths and dirty rectangles, and the game step.
 
 Speed-ups so far: a polygon drawer that carries on from the previous edge instead of setting each edge up again; rocks prepared once per orientation (edge list in `GameAsteroid.draw_cache`, drawn by `st_draw_rock`); border clipping with `muls`/`divs` instead of the 32-bit library divide; two-pixel bullets drawn by a dedicated routine; small and medium rocks drawn with 6 and 8 corners; the HUD redrawn field by field (and its digits without divisions); collision loops that only visit the rocks in play.
 
-The per-rock render loop is in assembly (`src/st_rocks.S`, called through the optional `GameRenderer.rocks` hook): it works out each rock's screen position, keeps its cached outline up to date, reports its dirty rectangle and draws it. Rocks that straddle the field border are left to the C route (`render_pending`). The assembly reads `GameState`/`GameAsteroid` fields through byte offsets that the compiler works out (`src/offsets.c` -> `build/asm_offsets.inc`), so changing those structs needs no hand-edited constants. Tag `v1.0` is the last version with the all-C rock loop.
+The per-rock render loop is in assembly (`src/st_rocks.S`, called through the optional `GameRenderer.rocks` hook): it works out each rock's screen position, keeps its cached outline up to date, reports its dirty rectangle and draws it. Rocks that poke out over the border are drawn by `st_draw_border_rock` (runs of inside edges, and the crossing edges clipped Cohen-Sutherland style); `render_pending` remains as the way a drawer can hand a rock back to the C route. The assembly reads `GameState`/`GameAsteroid` fields through byte offsets that the compiler works out (`src/offsets.c` -> `build/asm_offsets.inc`), so changing those structs needs no hand-edited constants. The dirty-rectangle erase (`st_clear_rects`) and the hot loops of the game step (`src/st_step.S`: moving/wrapping rocks and bullets, and the bullet-versus-rock hit search) are in assembly too; the C versions (`game_update_rocks_ref` and friends) are what host builds use and what the game tests compare the assembly with. Tag `v1.0` is the last version with the all-C rock loop.
 
 ## Running on real hardware
 
