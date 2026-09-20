@@ -44,17 +44,25 @@ The implementation direction was adjusted using the `Atari_ST_Sources` archive a
 
 ### Controls
 
-- left arrow or `A`: rotate left
-- right arrow or `D`: rotate right
-- up arrow or `W`: thrust
-- `F1`: switch the frame pacing (steady / free) on and off
-- `Space`: fire (also starts a game and confirms on the menus)
-- `H`: hyperspace
-- `P`: pause
-- `Return`: start a game / confirm
-- `Esc` or `Q`: quit to the desktop
+Keyboard, and a joystick in either joystick port (the ST reports them through the keyboard processor; both ports work at once):
 
-The game starts on the title screen and there is no autopilot: it is all you. Press `Space` to start. When you lose your last life the score is shown; if it makes the top 5 you enter three initials (left/right change the letter, `Space` accepts it). High scores are saved to `ASTROIDS.SCO` in the current directory.
+| action | keyboard | joystick |
+|---|---|---|
+| rotate left / right | left / right arrow, `A` / `D` | left / right |
+| thrust | up arrow, `W` | up |
+| fire | `Space`, `Ctrl`, `Alt` | button |
+| hyperspace | `H` (or `Space`, see the setting below) | - |
+| pause | `P` or `Esc` | - |
+| start a game / confirm | `Space`, `Return`, `Enter` | button |
+| menu up / down | `W` / `S`, up / down arrow | up / down |
+
+- `Esc` during a game pauses it and shows PAUSED in big blocky letters. On the pause screen `Space` (or the button) continues and `Esc` again goes back to the main menu.
+- `Esc` on the main menu quits to the desktop (`Q` no longer does).
+- The main menu shows the high score list. Below it is the one setting: **HYPERSPACE KEY: H / SPACE**. Move down to it with the down arrow (or joystick down) and press fire or left/right to change it; it is saved in `ASTROIDS.CFG`. With hyperspace on `Space`, fire is the joystick button (or `Ctrl` / `Alt`), which suits a joystick in one hand and the space bar under the other. `H` keeps working either way.
+- `F1`: switch the frame pacing (steady / free) on and off.
+- Entering initials for a high score: type letters on the keyboard (`Backspace` goes back, `Return` accepts), or use left/right to change the letter and fire to accept.
+
+The game starts on the title screen and there is no autopilot: it is all you. Press `Space` to start. When you lose your last life the score is shown; if it makes the top 5 you enter three initials. High scores are saved to `ASTROIDS.SCO` in the current directory.
 
 ## Building
 

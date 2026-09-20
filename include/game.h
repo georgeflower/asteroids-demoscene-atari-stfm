@@ -83,7 +83,12 @@ typedef struct GameInput {
     uint8_t hyperspace;
     uint8_t start;          /* Space or Return: start a game, confirm */
     uint8_t pause;
-    uint8_t exit_requested;
+    uint8_t escape;         /* Esc: pauses; on a pause screen it goes back to the menu, on the menu it quits */
+    uint8_t down;           /* menu: down (thrust is up) */
+    uint8_t space;          /* the space bar itself, which can be fire or hyperspace (see hyper_on_space) */
+    uint8_t fire_alt;       /* fire that is not the space bar: joystick button, Ctrl, Alt */
+    uint8_t typed;          /* a letter typed on the keyboard since the last step ('A' - 'Z'), else 0; one step only */
+    uint8_t backspace;      /* Backspace pressed since the last step; one step only */
 } GameInput;
 
 typedef struct GameShip {
@@ -238,6 +243,11 @@ typedef struct GameState {
     uint8_t mode;
     uint16_t mode_timer;
     uint8_t paused;
+    uint8_t quit_requested;     /* set when Esc is pressed on the main menu: the program should exit */
+    uint8_t hyper_on_space;     /* setting: hyperspace on the space bar instead of H (fire is then the joystick button) */
+    uint8_t settings_changed;   /* set when a setting was changed and should be saved */
+    uint8_t menu_item;          /* main menu selection: 0 start, 1 the hyperspace key setting */
+    uint8_t ignore_keys;        /* fire and hyperspace stay off until the keys that started/resumed the game are let go */
     uint16_t banner_timer;      /* frames left of the "WAVE n" banner */
     uint32_t score;
     uint32_t next_extra_life;

@@ -459,11 +459,26 @@ static void update_ship(GameState *state, const GameInput *input) {
     if (ship->hyperspace_cooldown > 0) {
         --ship->hyperspace_cooldown;
     }
-    if (input->fire && ship->cooldown == 0) {
-        fire_bullet(state);
-    }
-    if (input->hyperspace && ship->hyperspace_cooldown == 0) {
-        hyperspace(state);
+    {
+        /* fire is the space bar (or the other fire keys and the joystick), unless hyperspace is on the space bar:
+           then fire is only the joystick button and the other fire keys */
+        int fire = state->hyper_on_space ? input->fire_alt : input->fire;
+        int hyper = input->hyperspace || (state->hyper_on_space && input->space);
+
+        if (state->ignore_keys) {
+            if (input->fire || input->fire_alt || input->space || input->start) {
+                fire = 0;
+                hyper = 0;
+            } else {
+                state->ignore_keys = 0;
+            }
+        }
+        if (fire && ship->cooldown == 0) {
+            fire_bullet(state);
+        }
+        if (hyper && ship->hyperspace_cooldown == 0) {
+            hyperspace(state);
+        }
     }
 
     vx8 = ship->vx >> 8;
@@ -1600,9 +1615,36 @@ void game_init(GameState *state, uint16_t field_x, uint16_t field_y, uint16_t fi
 }
 
 static void step_title(GameState *state, const GameInput *input, const GameInput *previous) {
-    if (pressed(input->start, previous->start) || pressed(input->fire, previous->fire)) {
-        game_start(state);
+    if (pressed(input->escape, previous->escape)) {
+        state->quit_requested = 1;
         return;
+    }
+    if (pressed(input->down, previous->down) && state->menu_item == 0) {
+        state->menu_item = 1;
+        state->screen_refresh = 2;
+        emit(state, SFX_MENU);
+    }
+    if (pressed(input->thrust, previous->thrust) && state->menu_item == 1) {
+        state->menu_item = 0;
+        state->screen_refresh = 2;
+        emit(state, SFX_MENU);
+    }
+    if (pressed(input->start, previous->start) || pressed(input->fire, previous->fire)) {
+        if (state->menu_item == 0) {
+            game_start(state);
+            state->ignore_keys = 1;   /* the space bar that started the game must not fire or jump at once */
+            return;
+        }
+        state->hyper_on_space ^= 1;
+        state->settings_changed = 1;
+        state->screen_refresh = 2;
+        emit(state, SFX_MENU);
+    }
+    if (state->menu_item == 1 && (pressed(input->left, previous->left) || pressed(input->right, previous->right))) {
+        state->hyper_on_space ^= 1;
+        state->settings_changed = 1;
+        state->screen_refresh = 2;
+        emit(state, SFX_MENU);
     }
     if (++state->mode_timer >= PROMPT_BLINK_FRAMES) {
         state->mode_timer = 0;
@@ -1612,10 +1654,29 @@ static void step_title(GameState *state, const GameInput *input, const GameInput
 }
 
 static void step_playing(GameState *state, const GameInput *input, const GameInput *previous) {
+    if (pressed(input->escape, previous->escape)) {
+        if (state->paused) {
+            /* Esc on the pause screen: back to the main menu */
+            state->paused = 0;
+            state->menu_item = 0;
+            enter_mode(state, GAME_MODE_TITLE);
+            emit(state, SFX_MENU);
+        } else {
+            state->paused = 1;
+        }
+        return;
+    }
     if (pressed(input->pause, previous->pause)) {
         state->paused ^= 1;
+        if (!state->paused) {
+            state->ignore_keys = 1;
+        }
     }
     if (state->paused) {
+        if (pressed(input->start, previous->start) || pressed(input->fire, previous->fire)) {
+            state->paused = 0;       /* Space (or the joystick button) continues */
+            state->ignore_keys = 1;
+        }
         return;
     }
 
@@ -1690,6 +1751,22 @@ static void step_enter_initials(GameState *state, const GameInput *input, const 
         } else if (*letter < 'A') {
             *letter = 'Z';
         }
+        state->screen_refresh = 2;
+    }
+
+    /* letters can be typed too: the letter goes in and the cursor moves on (the last one waits to be accepted) */
+    if (input->typed >= 'A' && input->typed <= 'Z') {
+        state->entry[state->entry_position] = (char) input->typed;
+        if (state->entry_position < INITIALS_LENGTH - 1) {
+            ++state->entry_position;
+            state->entry[state->entry_position] = 'A';
+        }
+        emit(state, SFX_MENU);
+        state->screen_refresh = 2;
+    }
+    if (input->backspace && state->entry_position > 0) {
+        --state->entry_position;
+        emit(state, SFX_MENU);
         state->screen_refresh = 2;
     }
 
@@ -2305,10 +2382,11 @@ static void put_text(const GameRenderer *renderer, int x, int y, const char *tex
 }
 
 static int centered_x(const GameState *state, const char *text, int scale) {
-    const int cell = (scale == 2) ? 16 : 8;
+    const int cell = 8 * scale;
+    const int align = (scale >= 2) ? 16 : 8;   /* the big letters start on a 16-pixel boundary */
     const int width = (int) strlen(text) * cell;
 
-    return state->field_x + (((state->field_width - width) / 2) / cell) * cell;
+    return state->field_x + (((state->field_width - width) / 2) / align) * align;
 }
 
 /* Text centred on the playing field, y measured from the top of the field. */
@@ -2318,18 +2396,41 @@ static void put_centered(const GameState *state, const GameRenderer *renderer, i
 }
 
 /* The same, for text shown over the moving game: also reports its rectangle so it gets erased. */
-static void put_centered_overlay(const GameState *state, const GameRenderer *renderer, int y, const char *text,
-                                 uint8_t fg) {
-    const int x = centered_x(state, text, 1);
+static void put_centered_overlay_scaled(const GameState *state, const GameRenderer *renderer, int y, const char *text,
+                                        uint8_t fg, int scale) {
+    const int x = centered_x(state, text, scale);
     const int top = state->field_y + y;
 
-    put_text(renderer, x, top, text, fg, GAME_COLOR_BLACK, 1);
-    mark_rect(renderer, x, top, x + (int) strlen(text) * 8 - 1, top + 7);
+    put_text(renderer, x, top, text, fg, GAME_COLOR_BLACK, (uint8_t) scale);
+    mark_rect(renderer, x, top, x + (int) strlen(text) * 8 * scale - 1, top + 8 * scale - 1);
+}
+
+static void put_centered_overlay(const GameState *state, const GameRenderer *renderer, int y, const char *text,
+                                 uint8_t fg) {
+    put_centered_overlay_scaled(state, renderer, y, text, fg, 1);
+}
+
+/* The pause screen: PAUSED in big blocky letters (each pixel of the 8x8 font is a 4x4 block), and what the keys do. */
+static void draw_pause_overlay(const GameState *state, const GameRenderer *renderer) {
+    put_centered_overlay_scaled(state, renderer, 46, "PAUSED", GAME_COLOR_YELLOW, 4);
+    put_centered_overlay(state, renderer, 92, "ESC  EXIT TO MENU", GAME_COLOR_WHITE);
+    put_centered_overlay(state, renderer, 104, "SPACE  CONTINUE", GAME_COLOR_WHITE);
 }
 
 static void draw_prompt(const GameState *state, const GameRenderer *renderer) {
-    put_centered(state, renderer, 124, "PRESS FIRE TO START",
+    put_centered(state, renderer, 124, state->menu_item == 0 ? "PRESS FIRE TO START" : "PRESS FIRE TO CHANGE ",
                  state->prompt_visible ? GAME_COLOR_YELLOW : GAME_COLOR_BLACK, 1);
+}
+
+/* The one setting: which key is hyperspace. Up and down (or the joystick) move between it and the start line. */
+static void draw_settings_line(const GameState *state, const GameRenderer *renderer) {
+    const int selected = state->menu_item == 1;
+    char line[32];
+
+    memcpy(line, selected ? "> " : "  ", 2);
+    memcpy(line + 2, state->hyper_on_space ? "HYPERSPACE KEY: SPACE" : "HYPERSPACE KEY: H    ", 21);
+    memcpy(line + 23, selected ? " <" : "  ", 3);
+    put_centered(state, renderer, 134, line, selected ? GAME_COLOR_YELLOW : GAME_COLOR_GREY, 1);
 }
 
 static void draw_title_screen(const GameState *state, const GameRenderer *renderer) {
@@ -2350,8 +2451,10 @@ static void draw_title_screen(const GameState *state, const GameRenderer *render
         put_centered(state, renderer, 68 + index * 10, line, index == 0 ? GAME_COLOR_YELLOW : GAME_COLOR_WHITE, 1);
     }
     draw_prompt(state, renderer);
-    put_centered(state, renderer, 146, "A/D OR ARROWS TURN  W OR UP THRUST", GAME_COLOR_GREY, 1);
+    draw_settings_line(state, renderer);
+    put_centered(state, renderer, 148, "A/D OR ARROWS TURN  W OR UP THRUST", GAME_COLOR_GREY, 1);
     put_centered(state, renderer, 158, "SPACE FIRE  H HYPERSPACE  P PAUSE", GAME_COLOR_GREY, 1);
+    put_centered(state, renderer, 168, "JOYSTICK PORT 1 OR 2   ESC QUIT", GAME_COLOR_GREY, 1);
 }
 
 static void draw_game_over_screen(const GameState *state, const GameRenderer *renderer) {
@@ -2386,7 +2489,7 @@ static void draw_initials_screen(const GameState *state, const GameRenderer *ren
         put_text(renderer, letters_x + index * 32, state->field_y + 118, index == state->entry_position ? "^" : " ",
                  GAME_COLOR_YELLOW, GAME_COLOR_BLACK, 1);
     }
-    put_centered(state, renderer, 146, "LEFT/RIGHT CHANGE  FIRE ACCEPT", GAME_COLOR_GREY, 1);
+    put_centered(state, renderer, 146, "TYPE OR LEFT/RIGHT  RETURN OK", GAME_COLOR_GREY, 1);
 }
 
 /* ---- HUD (in the frame above the playing field) ---- */
@@ -2586,7 +2689,7 @@ void game_render(GameState *state, const GameRenderer *renderer) {
         }
 
         if (state->paused) {
-            put_centered_overlay(state, renderer, 84, "PAUSED", GAME_COLOR_YELLOW);
+            draw_pause_overlay(state, renderer);
         } else if (state->banner_timer > 0) {
             char banner[8];
 

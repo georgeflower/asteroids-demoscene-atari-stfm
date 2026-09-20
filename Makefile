@@ -7,7 +7,7 @@ TEST_DIR := tests
 CROSS ?= m68k-atari-mint-
 CC := $(CROSS)gcc
 HOST_CC ?= cc
-CFLAGS := -std=c99 -m68000 -O2 -Wall -Wextra -Werror -fomit-frame-pointer -I$(INC_DIR) -I$(BUILD_DIR) $(EXTRA_CFLAGS)
+CFLAGS := -std=c99 -m68000 -O2 -Wall -Wextra -Wno-missing-field-initializers -Werror -fomit-frame-pointer -I$(INC_DIR) -I$(BUILD_DIR) $(EXTRA_CFLAGS)
 ASFLAGS := -m68000 -I$(BUILD_DIR)
 LDFLAGS := -s
 TARGET := $(BUILD_DIR)/$(PROJECT).PRG

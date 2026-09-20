@@ -398,9 +398,9 @@ static void reference_pixel(unsigned char *buffer, int x, int y, int color) {
 }
 
 static void reference_text(unsigned char *buffer, int x, int y, const char *text, int fg, int bg, int scale) {
-    const int cell = (scale == 2) ? 16 : 8;
+    const int cell = 8 * scale;
 
-    x -= x % cell;
+    x -= x % (scale >= 2 ? 16 : 8);
     for (; *text != 0; ++text, x += cell) {
         int row;
         int column;
@@ -465,8 +465,8 @@ static void test_text(void) {
 
     for (trial = 0; trial < 300; ++trial) {
         const char *text = samples[trial % 7];
-        const int scale = 1 + (trial % 3 == 0);
-        const int cell = (scale == 2) ? 16 : 8;
+        const int scale = (trial % 3 == 0) ? 2 : (trial % 7 == 1 ? 4 : 1);
+        const int cell = 8 * scale;
         const int length = (int) strlen(text);
         const int width = length * cell;
         const int max_x = WIDTH - width;

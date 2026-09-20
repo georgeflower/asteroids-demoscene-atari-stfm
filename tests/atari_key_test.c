@@ -10,6 +10,7 @@
 #include <string.h>
 
 extern volatile unsigned char st_key_state[128];
+extern volatile unsigned char st_joystick[2];
 
 static void log_line(const char *text) {
     static const char path[] = {'C', ':', 92, 'K', 'E', 'Y', 'T', 'E', 'S', 'T', '.', 'L', 'O', 'G', 0};
@@ -44,8 +45,10 @@ int main(void) {
                 length += sprintf(text + length, " %02x", index);
             }
         }
-        length += sprintf(text + length, " | L%d R%d T%d F%d H%d S%d P%d Q%d", input.left, input.right, input.thrust,
-                          input.fire, input.hyperspace, input.start, input.pause, input.exit_requested);
+        length += sprintf(text + length, " | L%d R%d T%d D%d F%d A%d H%d S%d P%d E%d joy %02x %02x typed %c%s",
+                          input.left, input.right, input.thrust, input.down, input.fire, input.fire_alt,
+                          input.hyperspace, input.start, input.pause, input.escape, st_joystick[0], st_joystick[1],
+                          input.typed ? input.typed : '-', input.backspace ? " BS" : "");
         if (strcmp(text, previous) != 0) {
             char stamped[200];
             sprintf(stamped, "f%d %s", frame, text);

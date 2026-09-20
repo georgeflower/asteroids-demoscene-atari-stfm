@@ -56,4 +56,8 @@ void platform_sound_write(uint8_t reg, uint8_t value);
 int platform_load_scores(uint8_t *data, int size);
 void platform_save_scores(const uint8_t *data, int size);
 
+/* Settings file (ASTROIDS.CFG in the current directory), same idea as the score file. */
+int platform_load_settings(uint8_t *data, int size);
+void platform_save_settings(const uint8_t *data, int size);
+
 #endif

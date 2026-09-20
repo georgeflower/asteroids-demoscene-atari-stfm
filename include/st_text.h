@@ -5,7 +5,7 @@
  * Bitmap text for a 4-plane low-resolution ST screen (320x200, 160 bytes per row).
  * Each character is an 8x8 cell (16x16 at scale 2) drawn opaquely: set pixels get colour
  * fg, the rest colour bg (palette indices 0-15). x is rounded down to a multiple of 8
- * (16 at scale 2). Text is upper case only; anything off the screen is skipped.
+ * (16 at scales 2 and 4; scale 4 is 32x32 cells, every font pixel a 4x4 block). Text is upper case only; anything off the screen is skipped.
  */
 void st_text_draw(unsigned char *buffer, int x, int y, const char *text, int fg, int bg, int scale);
 

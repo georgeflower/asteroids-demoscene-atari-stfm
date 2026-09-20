@@ -679,6 +679,255 @@ static void test_pause(void) {
     CHECK(state.asteroids[0].x != x_before);
 }
 
+/* ---- tests: Esc, the pause screen, the menu, the setting, typing initials ---- */
+
+static void run_game_over_with_score(GameState *state, uint32_t score);
+
+static void release(GameState *state) {
+    game_step(state, &no_input);
+}
+
+static void test_escape_pauses_and_leaves(void) {
+    GameState state;
+    GameInput escape = {0};
+    GameInput space = {0};
+    int32_t x_before;
+    int frame;
+
+    escape.escape = 1;
+    space.start = 1;
+    space.space = 1;
+    space.fire = 1;
+
+    init_playing(&state);
+
+    /* Esc once: paused, nothing moves, the pause screen shows */
+    game_step(&state, &escape);
+    CHECK(state.paused);
+    CHECK(state.mode == GAME_MODE_PLAYING);
+    release(&state);
+    x_before = state.asteroids[0].x;
+    for (frame = 0; frame < 10; ++frame) {
+        release(&state);
+    }
+    CHECK(state.asteroids[0].x == x_before);
+    render(&state);
+    CHECK(has_text("PAUSED"));
+    {
+        const TextCall *big = find_text("PAUSED");
+
+        CHECK(big != NULL && big->scale == 4 && big->x % 16 == 0);
+    }
+    CHECK(has_text("ESC  EXIT TO MENU"));
+    CHECK(has_text("SPACE  CONTINUE"));
+
+    /* Space continues, and the space bar that did it does not also fire */
+    game_step(&state, &space);
+    CHECK(!state.paused);
+    CHECK(state.mode == GAME_MODE_PLAYING);
+    for (frame = 0; frame < 5; ++frame) {
+        game_step(&state, &space);
+    }
+    CHECK(state.bullets[0].active == 0);
+    release(&state);
+    CHECK(state.asteroids[0].x != x_before);
+
+    /* Esc, Esc: back to the main menu, with the high scores on it */
+    game_step(&state, &escape);
+    CHECK(state.paused);
+    release(&state);
+    game_step(&state, &escape);
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(!state.quit_requested);
+    release(&state);
+    render(&state);
+    CHECK(has_text("- HALL OF FAME -"));
+
+    /* Esc on the menu quits the program */
+    game_step(&state, &escape);
+    CHECK(state.quit_requested);
+}
+
+static void test_p_pauses_too(void) {
+    GameState state;
+    GameInput pause = {0};
+    GameInput space = {0};
+
+    pause.pause = 1;
+    space.start = 1;
+    space.space = 1;
+    space.fire = 1;
+    init_playing(&state);
+    game_step(&state, &pause);
+    CHECK(state.paused);
+    release(&state);
+    game_step(&state, &space);   /* Space also continues after P */
+    CHECK(!state.paused);
+}
+
+static void test_menu_setting(void) {
+    GameState state;
+    GameInput down = {0};
+    GameInput up = {0};
+    GameInput fire = {0};
+    GameInput right = {0};
+
+    down.down = 1;
+    up.thrust = 1;
+    fire.start = 1;
+    fire.fire = 1;
+    right.right = 1;
+
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(state.menu_item == 0);
+    CHECK(!state.hyper_on_space);
+    render(&state);
+    CHECK(has_text("PRESS FIRE TO START"));
+    CHECK(has_text("  HYPERSPACE KEY: H      "));
+
+    /* down selects the setting; fire changes it instead of starting the game */
+    game_step(&state, &down);
+    CHECK(state.menu_item == 1);
+    release(&state);
+    game_step(&state, &fire);
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(state.hyper_on_space);
+    CHECK(state.settings_changed);
+    release(&state);
+    render(&state);
+    CHECK(has_text("> HYPERSPACE KEY: SPACE <"));
+
+    /* left / right change it as well, and it is saved each time */
+    state.settings_changed = 0;
+    game_step(&state, &right);
+    CHECK(!state.hyper_on_space);
+    CHECK(state.settings_changed);
+    release(&state);
+
+    /* up goes back to the start line, and fire starts the game */
+    game_step(&state, &up);
+    CHECK(state.menu_item == 0);
+    release(&state);
+    game_step(&state, &fire);
+    CHECK(state.mode == GAME_MODE_PLAYING);
+}
+
+static void test_hyperspace_on_space(void) {
+    GameState state;
+    GameInput space = {0};
+    GameInput button = {0};
+    GameInput hyper_key = {0};
+    int frame;
+
+    space.start = 1;
+    space.space = 1;
+    space.fire = 1;      /* the platform sets fire for the space bar too */
+    button.fire = 1;
+    button.fire_alt = 1;
+    hyper_key.hyperspace = 1;
+
+    /* default: Space fires, H is hyperspace */
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    game_step(&state, &space);
+    CHECK(state.bullets[0].active || state.bullets[1].active);
+    release(&state);
+    state.ship.hyperspace_cooldown = 0;
+    game_step(&state, &hyper_key);
+    CHECK(state.ship.hyperspace_cooldown > 0);
+
+    /* hyperspace on Space: Space jumps and no longer fires; the joystick button and Ctrl/Alt fire */
+    init_playing(&state);
+    clear_field(&state);
+    state.ship.invulnerability = 255;
+    state.hyper_on_space = 1;
+    game_step(&state, &space);
+    CHECK(state.ship.hyperspace_cooldown > 0);
+    for (frame = 0; frame < GAME_MAX_BULLETS; ++frame) {
+        CHECK(!state.bullets[frame].active);
+    }
+    release(&state);
+    game_step(&state, &button);
+    CHECK(state.bullets[0].active || state.bullets[1].active);
+    release(&state);
+    /* H still works as well */
+    state.ship.hyperspace_cooldown = 0;
+    game_step(&state, &hyper_key);
+    CHECK(state.ship.hyperspace_cooldown > 0);
+}
+
+static void test_start_key_does_not_jump(void) {
+    GameState state;
+    GameInput space = {0};
+    int frame;
+
+    space.start = 1;
+    space.space = 1;
+    space.fire = 1;
+
+    /* starting the game with the space bar while hyperspace is on it: still held for a few frames, no jump */
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    state.hyper_on_space = 1;
+    game_step(&state, &space);
+    CHECK(state.mode == GAME_MODE_PLAYING);
+    for (frame = 0; frame < 10; ++frame) {
+        game_step(&state, &space);
+    }
+    CHECK(state.ship.hyperspace_cooldown == 0);
+    release(&state);
+    game_step(&state, &space);
+    CHECK(state.ship.hyperspace_cooldown > 0);   /* pressed again on purpose */
+}
+
+static void test_typing_initials(void) {
+    GameState state;
+    GameInput typed = {0};
+    GameInput back = {0};
+    GameInput ret = {0};
+
+    ret.start = 1;
+    game_init(&state, FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+    run_game_over_with_score(&state, 1234);
+    CHECK(state.mode == GAME_MODE_ENTER_INITIALS);
+
+    typed.typed = 'G';
+    game_step(&state, &typed);
+    CHECK(state.entry[0] == 'G');
+    CHECK(state.entry_position == 1);
+    typed.typed = 'O';
+    game_step(&state, &typed);
+    CHECK(state.entry[1] == 'O');
+    CHECK(state.entry_position == 2);
+
+    /* a typo: backspace goes back, the next letter replaces it */
+    typed.typed = 'X';
+    game_step(&state, &typed);
+    CHECK(state.entry[2] == 'X');
+    CHECK(state.entry_position == 2);   /* the last letter waits for Return */
+    back.backspace = 1;
+    game_step(&state, &back);
+    CHECK(state.entry_position == 1);
+    typed.typed = 'A';
+    game_step(&state, &typed);
+    CHECK(state.entry[1] == 'A');
+    typed.typed = 'L';
+    game_step(&state, &typed);
+    CHECK(state.entry[2] == 'L');
+    CHECK(state.mode == GAME_MODE_ENTER_INITIALS);
+
+    /* lower-case or other keys do nothing */
+    typed.typed = '5';
+    game_step(&state, &typed);
+    CHECK(state.entry[2] == 'L');
+
+    game_step(&state, &ret);
+    CHECK(state.mode == GAME_MODE_TITLE);
+    CHECK(strcmp(state.high_scores[0].initials, "GAL") == 0);
+    CHECK(state.high_scores[0].score == 1234);
+}
+
 /* ---- tests: game over, high scores ---- */
 
 static void test_game_over_without_high_score(void) {
@@ -2856,6 +3105,12 @@ int main(void) {
     test_boss_hit_flash_and_sound();
     test_enemy_rendering();
     test_rock_offset_route();
+    test_escape_pauses_and_leaves();
+    test_p_pauses_too();
+    test_menu_setting();
+    test_hyperspace_on_space();
+    test_start_key_does_not_jump();
+    test_typing_initials();
 #ifdef ATARI_ST_TARGET
     test_step_assembly_matches_c();
 #endif

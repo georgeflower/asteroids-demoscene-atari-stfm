@@ -23,6 +23,7 @@ int main(void) {
     GameInput input;
     GameRenderer renderer;
     uint8_t score_file[GAME_SCORE_FILE_BYTES];
+    uint8_t settings_file[4];
     int steps;
 
     renderer.context = NULL;
@@ -49,16 +50,22 @@ int main(void) {
     if (platform_load_scores(score_file, (int) sizeof(score_file)) == (int) sizeof(score_file)) {
         (void) game_scores_unpack(&game, score_file);
     }
+    if (platform_load_settings(settings_file, (int) sizeof(settings_file)) == (int) sizeof(settings_file) &&
+        settings_file[0] == 'C' && settings_file[1] == 'F' && settings_file[2] == '1') {
+        game.hyper_on_space = (uint8_t) (settings_file[3] & 1);
+    }
 
     for (;;) {
         platform_poll_input(&input);
-        if (input.exit_requested) {
+        if (game.quit_requested) {
             break;
         }
 
         /* one game step per vertical blank, so the game keeps its speed when a frame takes longer */
         for (steps = platform_take_elapsed_frames(); steps > 0; --steps) {
             game_step(&game, &input);
+            input.typed = 0;        /* typed letters and backspace happen once, however many steps this frame has */
+            input.backspace = 0;
             play_sounds(&game);
             sound_tick();
         }
@@ -66,6 +73,15 @@ int main(void) {
             game_scores_pack(&game, score_file);
             platform_save_scores(score_file, (int) sizeof(score_file));
             game.scores_changed = 0;
+        }
+
+        if (game.settings_changed) {
+            settings_file[0] = 'C';
+            settings_file[1] = 'F';
+            settings_file[2] = '1';
+            settings_file[3] = game.hyper_on_space;
+            platform_save_settings(settings_file, (int) sizeof(settings_file));
+            game.settings_changed = 0;
         }
 
         renderer.low_detail = (uint8_t) (platform_pace_cadence() >= 3);

@@ -29,6 +29,7 @@
 #define FIELD_X1 (PLATFORM_FIELD_X + PLATFORM_FIELD_WIDTH - 1)
 
 #define SCORE_FILE "ASTROIDS.SCO"
+#define SETTINGS_FILE "ASTROIDS.CFG"
 #define MAX_DIRTY_RECTS 96
 #define POLYGON_MAX_POINTS 24
 
@@ -68,8 +69,13 @@ static void pace_poll_key(void);
 extern void st_ikbd_install(void);
 extern void st_ikbd_remove(void);
 
-/* Written by the IKBD interrupt handler in st_ikbd.S: 1 while the key is held. */
+/* Written by the IKBD interrupt handler in st_ikbd.S: 1 while the key is held; the make codes in the order
+   pressed (a ring of 16, the handler moves head, we move tail); the last joystick byte of each port. */
 volatile unsigned char st_key_state[128];
+extern volatile unsigned char st_key_queue[16];
+extern volatile unsigned char st_key_head;
+extern volatile unsigned char st_key_tail;
+extern volatile unsigned char st_joystick[2];
 
 typedef struct DirtyRect {
     short x0;
@@ -177,7 +183,7 @@ static void enter_video(void) {
 }
 
 int platform_init(void) {
-    static const char ikbd_game_mode[] = { 0x12, 0x1a };  /* mouse off, joysticks off */
+    static const char ikbd_game_mode[] = { 0x12, 0x14 };  /* mouse off, joystick events on */
     int i;
 
     entered_supervisor = 0;
@@ -205,6 +211,10 @@ int platform_init(void) {
     screen_pages[0] = aligned_screen(0);
     screen_pages[1] = aligned_screen(1);
     memset((void *) st_key_state, 0, sizeof(st_key_state));
+    st_joystick[0] = 0;
+    st_joystick[1] = 0;
+    st_key_head = 0;
+    st_key_tail = 0;
 
     enter_video();
     (void) Ikbdws(1, ikbd_game_mode);
@@ -234,17 +244,50 @@ void platform_shutdown(void) {
     entered_supervisor = 0;
 }
 
+/* The letter on the key with this scan code (US layout positions, as on the ST keyboards), or 0. */
+static char letter_for_scancode(unsigned scancode) {
+    static const char top_row[] = "QWERTYUIOP";
+    static const char home_row[] = "ASDFGHJKL";
+    static const char bottom_row[] = "ZXCVBNM";
+
+    if (scancode >= 0x10u && scancode <= 0x19u) {
+        return top_row[scancode - 0x10u];
+    }
+    if (scancode >= 0x1eu && scancode <= 0x26u) {
+        return home_row[scancode - 0x1eu];
+    }
+    if (scancode >= 0x2cu && scancode <= 0x32u) {
+        return bottom_row[scancode - 0x2cu];
+    }
+    return 0;
+}
+
 void platform_poll_input(GameInput *input) {
+    const unsigned char joystick = (unsigned char) (st_joystick[0] | st_joystick[1]);   /* either port */
+
     memset(input, 0, sizeof(*input));
 
-    input->left = (uint8_t) (st_key_state[0x1eu] || st_key_state[0x4bu]);        /* A, left */
-    input->right = (uint8_t) (st_key_state[0x20u] || st_key_state[0x4du]);       /* D, right */
-    input->thrust = (uint8_t) (st_key_state[0x11u] || st_key_state[0x48u]);      /* W, up */
-    input->fire = st_key_state[0x39u];                                           /* space */
-    input->hyperspace = st_key_state[0x23u];                                     /* H */
-    input->start = (uint8_t) (st_key_state[0x39u] || st_key_state[0x1cu]);       /* space, return */
-    input->pause = st_key_state[0x19u];                                          /* P */
-    input->exit_requested = (uint8_t) (st_key_state[0x10u] || st_key_state[0x01u]);   /* Q, Esc */
+    input->left = (uint8_t) (st_key_state[0x1eu] || st_key_state[0x4bu] || (joystick & 4u));      /* A, left */
+    input->right = (uint8_t) (st_key_state[0x20u] || st_key_state[0x4du] || (joystick & 8u));     /* D, right */
+    input->thrust = (uint8_t) (st_key_state[0x11u] || st_key_state[0x48u] || (joystick & 1u));    /* W, up */
+    input->down = (uint8_t) (st_key_state[0x1fu] || st_key_state[0x50u] || (joystick & 2u));      /* S, down */
+    input->space = st_key_state[0x39u];
+    input->fire_alt = (uint8_t) (st_key_state[0x1du] || st_key_state[0x38u] || (joystick & 0x80u));   /* Ctrl, Alt, button */
+    input->fire = (uint8_t) (input->space || input->fire_alt);
+    input->hyperspace = st_key_state[0x23u];                                                       /* H */
+    input->start = (uint8_t) (st_key_state[0x39u] || st_key_state[0x1cu] || st_key_state[0x72u] ||
+                              (joystick & 0x80u));                                                 /* space, return, enter, button */
+    input->pause = st_key_state[0x19u];                                                            /* P */
+    input->escape = st_key_state[0x01u];                                                           /* Esc */
+
+    /* typing: one queued key press per poll, so nothing is lost when several arrive in one frame */
+    if (st_key_tail != st_key_head) {
+        const unsigned scancode = st_key_queue[st_key_tail];
+
+        st_key_tail = (unsigned char) ((st_key_tail + 1u) & 15u);
+        input->typed = (uint8_t) letter_for_scancode(scancode);
+        input->backspace = (uint8_t) (scancode == 0x0eu);
+    }
     pace_poll_key();
 }
 
@@ -772,6 +815,26 @@ int platform_load_scores(uint8_t *data, int size) {
     return count;
 }
 
+int platform_load_settings(uint8_t *data, int size) {
+    FILE *file = fopen(SETTINGS_FILE, "rb");
+    int count = 0;
+
+    if (file != NULL) {
+        count = (int) fread(data, 1, (size_t) size, file);
+        fclose(file);
+    }
+    return count;
+}
+
+void platform_save_settings(const uint8_t *data, int size) {
+    FILE *file = fopen(SETTINGS_FILE, "wb");
+
+    if (file != NULL) {
+        (void) fwrite(data, 1, (size_t) size, file);
+        fclose(file);
+    }
+}
+
 void platform_save_scores(const uint8_t *data, int size) {
     FILE *file = fopen(SCORE_FILE, "wb");
 
@@ -865,6 +928,17 @@ int platform_load_scores(uint8_t *data, int size) {
     (void) data;
     (void) size;
     return 0;
+}
+
+int platform_load_settings(uint8_t *data, int size) {
+    (void) data;
+    (void) size;
+    return 0;
+}
+
+void platform_save_settings(const uint8_t *data, int size) {
+    (void) data;
+    (void) size;
 }
 
 void platform_save_scores(const uint8_t *data, int size) {

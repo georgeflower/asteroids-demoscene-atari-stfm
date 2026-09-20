@@ -83,6 +83,52 @@ static void draw_cell_2x(unsigned char *buffer, int x, int y, const unsigned cha
     }
 }
 
+/* Widen the four bits of a nibble to sixteen, each four times. */
+static unsigned short quadruple_bits(unsigned char nibble) {
+    unsigned short wide = 0;
+    int bit;
+
+    for (bit = 0; bit < 4; ++bit) {
+        if (nibble & (8 >> bit)) {
+            wide |= (unsigned short) (15u << (12 - 4 * bit));
+        }
+    }
+    return wide;
+}
+
+/* Every pixel of the glyph becomes a 4x4 block: a 32x32 cell that starts on a 16-pixel boundary. */
+static void draw_cell_4x(unsigned char *buffer, int x, int y, const unsigned char *glyph, int fg, int bg) {
+    const int group_offset = (x >> 4) * 8;
+    int row;
+
+    for (row = 0; row < 8; ++row) {
+        const unsigned short halves[2] = {quadruple_bits((unsigned char) (glyph[row] >> 4)),
+                                          quadruple_bits((unsigned char) (glyph[row] & 15))};
+        int copy;
+
+        for (copy = 0; copy < 4; ++copy) {
+            int half;
+
+            for (half = 0; half < 2; ++half) {
+                unsigned short *target =
+                    (unsigned short *) (buffer + (y + row * 4 + copy) * ROW_BYTES + group_offset + half * 8);
+                int plane;
+
+                for (plane = 0; plane < 4; ++plane) {
+                    unsigned short value = 0;
+                    if ((fg >> plane) & 1) {
+                        value = (unsigned short) (value | halves[half]);
+                    }
+                    if ((bg >> plane) & 1) {
+                        value = (unsigned short) (value | (unsigned short) ~halves[half]);
+                    }
+                    target[plane] = value;
+                }
+            }
+        }
+    }
+}
+
 /* y * 160 without a 32-bit multiply (the 68000 has none): a table, filled on first use. */
 static short row_offset[SCREEN_HEIGHT];
 static int row_offset_ready;
@@ -113,10 +159,10 @@ void st_plot_point(unsigned char *buffer, int x, int y, int color) {
 }
 
 void st_text_draw(unsigned char *buffer, int x, int y, const char *text, int fg, int bg, int scale) {
-    const int cell_width = (scale == 2) ? 16 : 8;
-    const int cell_height = (scale == 2) ? 16 : 8;
+    const int cell_width = 8 * scale;
+    const int cell_height = 8 * scale;
 
-    x -= x % cell_width;
+    x -= x % (scale >= 2 ? 16 : 8);
     if (y < 0 || y + cell_height > SCREEN_HEIGHT) {
         return;
     }
@@ -125,7 +171,9 @@ void st_text_draw(unsigned char *buffer, int x, int y, const char *text, int fg,
         if (x < 0 || x + cell_width > SCREEN_WIDTH) {
             continue;
         }
-        if (scale == 2) {
+        if (scale == 4) {
+            draw_cell_4x(buffer, x, y, glyph_for(*text), fg, bg);
+        } else if (scale == 2) {
             draw_cell_2x(buffer, x, y, glyph_for(*text), fg, bg);
         } else {
             draw_cell_1x(buffer, x, y, glyph_for(*text), fg, bg);
