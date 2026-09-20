@@ -21,6 +21,7 @@ extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1,
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_polyline(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_pair(unsigned char *buffer, long x, long y, long plane_offset);
+extern void st_clear_rects(unsigned char *buffer, const short *rects, long count);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 
 static unsigned char buffer_a[SCREEN_BYTES + 2];
@@ -82,6 +83,40 @@ static void test_polygons(void) {
             if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
                 report("polygon vs lines, plane", plane);
             }
+        }
+    }
+}
+
+/* A list of rectangles must clear exactly what st_clear_rect does for each of them. */
+static void test_clear_rects(void) {
+    int trial;
+
+    for (trial = 0; trial < 300; ++trial) {
+        short rects[12][4];
+        const int count = 1 + (int) rand_below(12);
+        int index;
+        int fill;
+
+        for (fill = 0; fill < SCREEN_BYTES; ++fill) {
+            buffer_a[fill] = (unsigned char) (fill * 5 + trial + 1);
+            buffer_b[fill] = buffer_a[fill];
+        }
+        for (index = 0; index < count; ++index) {
+            const int width = 1 + (int) rand_below(trial % 3 == 0 ? 120 : 40);
+            const int height = 1 + (int) rand_below(40);
+            const int x0 = (int) rand_below((unsigned) (WIDTH - width));
+            const int y0 = (int) rand_below((unsigned) (HEIGHT - height));
+
+            rects[index][0] = (short) x0;
+            rects[index][1] = (short) y0;
+            rects[index][2] = (short) (x0 + width - 1);
+            rects[index][3] = (short) (y0 + height - 1);
+            st_clear_rect(buffer_b, rects[index][0] >> 4, rects[index][2] >> 4, rects[index][1], rects[index][3]);
+        }
+        st_clear_rects(buffer_a, &rects[0][0], count);
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("clear_rects vs clear_rect", trial);
         }
     }
 }
@@ -349,6 +384,7 @@ int main(void) {
     test_polygons();
     test_polyline();
     test_pair();
+    test_clear_rects();
     test_plane_matches_four_plane_drawer();
     test_clear_rect();
     test_text();

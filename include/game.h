@@ -328,6 +328,18 @@ void game_start(GameState *state);   /* begin a new game right away (what pressi
 void game_step(GameState *state, const GameInput *input);
 void game_render(GameState *state, const GameRenderer *renderer);
 
+/* Reference C versions of loops that the Atari build runs in assembly (st_step.S); the tests compare the two. */
+void game_update_rocks_ref(GameState *state);
+void game_update_bullets_ref(GameState *state);
+int game_find_bullet_hit_ref(const GameState *state, int first_bullet, int *rock);
+void game_nudge_rock(const GameState *state, GameAsteroid *asteroid);   /* called back from st_step.S */
+#ifdef ATARI_ST_TARGET
+void st_update_rocks(GameState *state);
+void st_update_bullets(GameState *state);
+/* reach: per rock size the largest 12.4 distance for a hit; returns the bullet index or -1, and the rock in *rock */
+long st_find_bullet_hit(const GameState *state, long first_bullet, const uint16_t *reach, long *rock);
+#endif
+
 /* For renderers that draw rocks themselves: rebuild the rock's cached outline if its orientation changed. */
 void game_prepare_rock(const GameState *state, GameAsteroid *asteroid);
 

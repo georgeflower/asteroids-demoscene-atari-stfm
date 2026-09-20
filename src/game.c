@@ -59,7 +59,13 @@
 #define REPEAT_NEXT_FRAMES 4
 #define INITIALS_LENGTH 3
 
-static const uint8_t asteroid_radius_table[4] = {0, 5, 10, 16};
+#define ROCK_RADIUS_SMALL 5
+#define ROCK_RADIUS_MEDIUM 10
+#define ROCK_RADIUS_LARGE 16
+static const uint8_t asteroid_radius_table[4] = {0, ROCK_RADIUS_SMALL, ROCK_RADIUS_MEDIUM, ROCK_RADIUS_LARGE};
+/* how far (in 12.4 world pixels) a bullet's centre may be from a rock's for a hit: radius plus the bullet's */
+static const uint16_t rock_hit_reach[4] = {0, (ROCK_RADIUS_SMALL + 1) << 4, (ROCK_RADIUS_MEDIUM + 1) << 4,
+                                           (ROCK_RADIUS_LARGE + 1) << 4};
 static const int32_t asteroid_speed_table[4] = {0, 37749, 25166, 15729};
 static const uint16_t asteroid_points_table[4] = {0, 100, 50, 20};
 static const uint8_t asteroid_color_table[4] = {
@@ -421,7 +427,7 @@ static void update_ship(GameState *state, const GameInput *input) {
     wrap_world(&ship->x, &ship->y);
 }
 
-static void update_bullets(GameState *state) {
+void game_update_bullets_ref(GameState *state) {
     int index;
     for (index = 0; index < GAME_MAX_BULLETS; ++index) {
         GameBullet *bullet = &state->bullets[index];
@@ -474,7 +480,12 @@ static void nudge_towards_ship(const GameState *state, GameAsteroid *asteroid) {
     asteroid->vy = ((vx * sine) + (vy * cosine)) >> 10;
 }
 
-static void update_asteroids(GameState *state) {
+/* For st_step.S, which does the moving and wrapping and calls back here for the rare wrap-around nudge. */
+void game_nudge_rock(const GameState *state, GameAsteroid *asteroid) {
+    nudge_towards_ship(state, asteroid);
+}
+
+void game_update_rocks_ref(GameState *state) {
     int index;
     for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
         GameAsteroid *asteroid = &state->asteroids[index];
@@ -488,6 +499,23 @@ static void update_asteroids(GameState *state) {
             nudge_towards_ship(state, asteroid);
         }
     }
+}
+
+/* The three loops that are worth doing in assembly on the Atari; the C versions are the reference. */
+static void update_bullets(GameState *state) {
+#ifdef ATARI_ST_TARGET
+    st_update_bullets(state);
+#else
+    game_update_bullets_ref(state);
+#endif
+}
+
+static void update_asteroids(GameState *state) {
+#ifdef ATARI_ST_TARGET
+    st_update_rocks(state);
+#else
+    game_update_rocks_ref(state);
+#endif
 }
 
 /* ---- power-ups and stars ---- */
@@ -1282,51 +1310,65 @@ static void resolve_enemy_threats(GameState *state) {
     }
 }
 
-/* The indices of the rocks in play, so the bullet loops do not step over dozens of empty slots. */
-static int collect_active_asteroids(const GameState *state, uint8_t *list) {
-    int count = 0;
-    int index;
-
-    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
-        if (state->asteroids[index].active) {
-            list[count++] = (uint8_t) index;
-        }
-    }
-    return count;
-}
-
-static void resolve_bullet_collisions(GameState *state) {
-    uint8_t active[GAME_MAX_ASTEROIDS];
-    int active_count = -1;   /* collected when the first bullet turns up */
+/* The first hit at or after bullet `first_bullet`: bullets in order, and for each the first rock (in slot order)
+   it touches. Returns the bullet's index, or -1, and the rock's index in *rock. */
+int game_find_bullet_hit_ref(const GameState *state, int first_bullet, int *rock) {
     int bullet_index;
-    int list_index;
+    int asteroid_index;
 
-    for (bullet_index = 0; bullet_index < GAME_MAX_BULLETS; ++bullet_index) {
-        GameBullet *bullet = &state->bullets[bullet_index];
+    for (bullet_index = first_bullet; bullet_index < GAME_MAX_BULLETS; ++bullet_index) {
+        const GameBullet *bullet = &state->bullets[bullet_index];
 
         if (!bullet->active) {
             continue;
         }
-        if (active_count < 0) {
-            active_count = collect_active_asteroids(state, active);
-        }
-        for (list_index = 0; list_index < active_count; ++list_index) {
-            GameAsteroid *asteroid = &state->asteroids[active[list_index]];
+        for (asteroid_index = 0; asteroid_index < GAME_MAX_ASTEROIDS; ++asteroid_index) {
+            const GameAsteroid *asteroid = &state->asteroids[asteroid_index];
 
-            if (within_radius(bullet->x, bullet->y, asteroid->x, asteroid->y,
+            if (asteroid->active &&
+                within_radius(bullet->x, bullet->y, asteroid->x, asteroid->y,
                               asteroid_radius_table[asteroid->size] + BULLET_RADIUS)) {
-                GameAsteroid exploded = *asteroid;
-                bullet->active = 0;
-                asteroid->active = 0;
-                add_score(state, asteroid_points_table[exploded.size]);
-                emit(state, exploded.size == GAME_ASTEROID_LARGE ? SFX_EXPLODE_LARGE :
-                            exploded.size == GAME_ASTEROID_MEDIUM ? SFX_EXPLODE_MEDIUM : SFX_EXPLODE_SMALL);
-                split_asteroid(state, &exploded);
-                maybe_drop_powerup(state, exploded.x, exploded.y);
-                active_count = collect_active_asteroids(state, active);   /* the rock went, its pieces came */
-                break;
+                *rock = asteroid_index;
+                return bullet_index;
             }
         }
+    }
+    return -1;
+}
+
+static void resolve_bullet_collisions(GameState *state) {
+    int bullet_index = 0;
+
+    for (;;) {
+        int rock_index = 0;
+        GameBullet *bullet;
+        GameAsteroid *asteroid;
+        GameAsteroid exploded;
+
+#ifdef ATARI_ST_TARGET
+        {
+            long rock_long = 0;
+
+            bullet_index = (int) st_find_bullet_hit(state, bullet_index, rock_hit_reach, &rock_long);
+            rock_index = (int) rock_long;
+        }
+#else
+        bullet_index = game_find_bullet_hit_ref(state, bullet_index, &rock_index);
+#endif
+        if (bullet_index < 0) {
+            break;
+        }
+        bullet = &state->bullets[bullet_index];
+        asteroid = &state->asteroids[rock_index];
+        exploded = *asteroid;
+        bullet->active = 0;
+        asteroid->active = 0;
+        add_score(state, asteroid_points_table[exploded.size]);
+        emit(state, exploded.size == GAME_ASTEROID_LARGE ? SFX_EXPLODE_LARGE :
+                    exploded.size == GAME_ASTEROID_MEDIUM ? SFX_EXPLODE_MEDIUM : SFX_EXPLODE_SMALL);
+        split_asteroid(state, &exploded);
+        maybe_drop_powerup(state, exploded.x, exploded.y);
+        ++bullet_index;   /* the rock went and its pieces came; carry on with the next bullet */
     }
 }
 

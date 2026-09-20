@@ -39,6 +39,7 @@ extern void st_draw_polyline(unsigned char *buffer, const short *points, long co
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
 extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_rock(unsigned char *buffer, long cx, long cy, const short *cache, long plane_offset);
+extern void st_clear_rects(unsigned char *buffer, const short *rects, long count);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 extern void st_ikbd_install(void);
 extern void st_ikbd_remove(void);
@@ -220,15 +221,11 @@ void platform_poll_input(GameInput *input) {
 
 void platform_begin_frame(void) {
     const int page = page_index();
-    int index;
 
     if (dirty_full[page]) {
         st_clear_rect(draw_buffer, FIELD_GROUP0, FIELD_GROUP1, FIELD_Y0, FIELD_Y1);
     } else {
-        for (index = 0; index < dirty_count[page]; ++index) {
-            const DirtyRect *rect = &dirty_rects[page][index];
-            st_clear_rect(draw_buffer, rect->x0 >> 4, rect->x1 >> 4, rect->y0, rect->y1);
-        }
+        st_clear_rects(draw_buffer, (const short *) dirty_rects[page], dirty_count[page]);
     }
     dirty_count[page] = 0;
     dirty_full[page] = 0;

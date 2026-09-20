@@ -85,15 +85,11 @@ int main(void) {
     MFP_TACR = 3;   /* divide by 16: 153600 / 15 = 10240 Hz */
 
 #ifdef PROF_STEP_ONLY
-    memset(state.asteroids, 0, sizeof(state.asteroids));
-    state.asteroids[0].active = 1;
-    state.asteroids[0].size = GAME_ASTEROID_SMALL;
-    state.asteroids[0].point_count = 8;
+    /* the natural rocks of the wave, shot at (and so split) all the time */
     for (frame = 0; frame < FRAMES; ++frame) {
         state.ship.invulnerability = 255;
-        state.asteroids[0].x = 5L << GAME_FIX_SHIFT;
-        state.asteroids[0].y = 5L << GAME_FIX_SHIFT;
         input.left = (uint8_t) ((frame / 40) & 1);
+        input.right = (uint8_t) (!input.left);
         input.thrust = (uint8_t) ((frame / 25) & 1);
         input.fire = (uint8_t) ((frame / 6) & 1);
         game_step(&state, &input);

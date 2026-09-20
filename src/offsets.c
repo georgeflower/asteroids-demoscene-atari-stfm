@@ -38,4 +38,21 @@ void layout(void) {
     DEF(GA_DRAW_CACHE_VALID, offsetof(GameAsteroid, draw_cache_valid));
     DEF(GA_DRAW_CACHE, offsetof(GameAsteroid, draw_cache));
     DEF(GA_RENDER_PENDING, offsetof(GameAsteroid, render_pending));
+    DEF(GA_VX, offsetof(GameAsteroid, vx));
+    DEF(GA_VY, offsetof(GameAsteroid, vy));
+    DEF(GA_SPIN, offsetof(GameAsteroid, spin));
+    DEF(GA_DRAW_COUNT, offsetof(GameAsteroid, draw_count));
+    DEF(GA_OFF_X, offsetof(GameAsteroid, off_x));
+    DEF(GA_OFF_Y, offsetof(GameAsteroid, off_y));
+    DEF(GS_BULLETS, offsetof(GameState, bullets));
+    DEF(GB_SIZEOF, sizeof(GameBullet));
+    DEF(GB_MAX, GAME_MAX_BULLETS);
+    DEF(GB_X, offsetof(GameBullet, x));
+    DEF(GB_Y, offsetof(GameBullet, y));
+    DEF(GB_VX, offsetof(GameBullet, vx));
+    DEF(GB_VY, offsetof(GameBullet, vy));
+    DEF(GB_ACTIVE, offsetof(GameBullet, active));
+    DEF(GB_LIFE, offsetof(GameBullet, life));
+    DEF(WORLD_MAX_X, (long) GAME_WORLD_WIDTH << GAME_FIX_SHIFT);
+    DEF(WORLD_MAX_Y, (long) GAME_WORLD_HEIGHT << GAME_FIX_SHIFT);
 }

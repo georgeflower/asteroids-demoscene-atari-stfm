@@ -2612,6 +2612,93 @@ static void test_rock_offset_route(void) {
     }
 }
 
+#ifdef ATARI_ST_TARGET
+/* The assembly loops of game_step against their C reference versions, on random states. */
+static unsigned long asm_rng = 31337;
+
+static int asm_rand(int limit) {
+    asm_rng = asm_rng * 1103515245ul + 12345ul;
+    return (int) (((asm_rng >> 16) & 0x7fffu) % (unsigned) limit);
+}
+
+static void randomize_step_state(GameState *state) {
+    int index;
+
+    init_playing(state);
+    memset(state->asteroids, 0, sizeof(state->asteroids));
+    for (index = 0; index < GAME_MAX_ASTEROIDS; ++index) {
+        GameAsteroid *rock = &state->asteroids[index];
+
+        rock->active = (uint8_t) (asm_rand(3) != 0);
+        rock->size = (uint8_t) (1 + asm_rand(3));
+        rock->point_count = (uint8_t) (8 + asm_rand(4));
+        /* near and beyond the edges of the world, so wrapping (and the nudge after it) happens a lot */
+        rock->x = ((int32_t) (asm_rand(400) - 40) << 16) + asm_rand(65536);
+        rock->y = ((int32_t) (asm_rand(320) - 40) << 16) + asm_rand(65536);
+        rock->vx = ((int32_t) (asm_rand(9) - 4) << 16) + asm_rand(65536);
+        rock->vy = ((int32_t) (asm_rand(9) - 4) << 16) + asm_rand(65536);
+        rock->angle = (uint16_t) asm_rand(65536);
+        rock->spin = (int16_t) (asm_rand(2000) - 1000);
+    }
+    state->ship.x = ((int32_t) asm_rand(320) << 16) + asm_rand(65536);
+    state->ship.y = ((int32_t) asm_rand(240) << 16) + asm_rand(65536);
+    for (index = 0; index < GAME_MAX_BULLETS; ++index) {
+        GameBullet *bullet = &state->bullets[index];
+
+        bullet->active = (uint8_t) (asm_rand(3) != 0);
+        bullet->life = (uint8_t) asm_rand(5);
+        bullet->x = ((int32_t) (asm_rand(400) - 40) << 16) + asm_rand(65536);
+        bullet->y = ((int32_t) (asm_rand(320) - 40) << 16) + asm_rand(65536);
+        bullet->vx = ((int32_t) (asm_rand(13) - 6) << 16) + asm_rand(65536);
+        bullet->vy = ((int32_t) (asm_rand(13) - 6) << 16) + asm_rand(65536);
+    }
+}
+
+static void test_step_assembly_matches_c(void) {
+    static GameState a;
+    static GameState b;
+    static const uint16_t reach[4] = {0, 6 << 4, 11 << 4, 17 << 4};
+    int trial;
+
+    for (trial = 0; trial < 400; ++trial) {
+        int first;
+
+        randomize_step_state(&a);
+        b = a;
+        game_update_rocks_ref(&a);
+        st_update_rocks(&b);
+        CHECK(memcmp(a.asteroids, b.asteroids, sizeof(a.asteroids)) == 0);
+
+        randomize_step_state(&a);
+        b = a;
+        game_update_bullets_ref(&a);
+        st_update_bullets(&b);
+        CHECK(memcmp(a.bullets, b.bullets, sizeof(a.bullets)) == 0);
+
+        /* hits: put bullets close to rocks so most searches find something, some on the exact edge of reach */
+        randomize_step_state(&a);
+        for (first = 0; first < GAME_MAX_BULLETS; ++first) {
+            GameBullet *bullet = &a.bullets[first];
+            const GameAsteroid *rock = &a.asteroids[asm_rand(GAME_MAX_ASTEROIDS)];
+
+            if (asm_rand(4) != 0) {
+                bullet->x = rock->x + ((int32_t) (asm_rand(41) - 20) << 12) + asm_rand(4096);
+                bullet->y = rock->y + ((int32_t) (asm_rand(41) - 20) << 12) + asm_rand(4096);
+            }
+        }
+        for (first = 0; first <= GAME_MAX_BULLETS; ++first) {
+            int rock_c = -2;
+            long rock_asm = -2;
+            const int bullet_c = game_find_bullet_hit_ref(&a, first, &rock_c);
+            const long bullet_asm = st_find_bullet_hit(&a, first, reach, &rock_asm);
+
+            CHECK(bullet_c == (int) bullet_asm);
+            CHECK(bullet_c < 0 || rock_c == (int) rock_asm);
+        }
+    }
+}
+#endif
+
 static void test_enemy_rendering(void) {
     GameState state;
     int kind;
@@ -2769,6 +2856,9 @@ int main(void) {
     test_boss_hit_flash_and_sound();
     test_enemy_rendering();
     test_rock_offset_route();
+#ifdef ATARI_ST_TARGET
+    test_step_assembly_matches_c();
+#endif
     test_dirty_rects_with_enemies();
     test_sound_engine();
     test_game_sound_events();

@@ -82,6 +82,79 @@ clearend:
 	movem.l	(%sp)+,%d2-%d7
 	rts
 
+| Clear a list of rectangles (x0, y0, x1, y1 as words, x in pixels, inclusive) rounded out to 16-pixel groups:
+| the same as calling st_clear_rect for each, without the calls.
+| void st_clear_rects(unsigned char *buf, const short *rects, long count)
+	.globl	_st_clear_rects
+_st_clear_rects:
+	movem.l	%d2-%d7/%a2-%a4,-(%sp)		| 36 bytes; arguments from 40(%sp)
+	move.l	40(%sp),%a2
+	move.l	44(%sp),%a3
+	move.l	48(%sp),%d0
+	ble.w	crdone
+	lsl.l	#3,%d0
+	lea	0(%a3,%d0.l),%a4		| a4 = end of the list
+crloop:
+	movem.w	(%a3)+,%d0-%d3			| x0, y0, x1, y1
+	sub.w	%d1,%d3				| rows - 1
+	mulu.w	#160,%d1
+	lea	0(%a2,%d1.l),%a0
+	lsr.w	#4,%d0
+	lsr.w	#4,%d2
+	sub.w	%d0,%d2				| groups - 1
+	lsl.w	#3,%d0
+	adda.w	%d0,%a0
+	move.w	%d3,%d7
+	moveq	#0,%d6
+	move.w	%d2,%d6
+	moveq	#0,%d0
+	moveq	#0,%d1
+	moveq	#0,%d2
+	moveq	#0,%d3
+	moveq	#0,%d4
+	moveq	#0,%d5
+	cmp.w	#3,%d6
+	bhi.s	crwide
+	add.w	%d6,%d6
+	move.w	crtable(%pc,%d6.w),%d6
+	jmp	crtable(%pc,%d6.w)
+crtable:
+	.word	cr1-crtable, cr2-crtable, cr3-crtable, cr4-crtable
+cr1:	movem.l	%d0-%d1,(%a0)
+	lea	160(%a0),%a0
+	dbra	%d7,cr1
+	bra.s	crnext
+cr2:	movem.l	%d0-%d3,(%a0)
+	lea	160(%a0),%a0
+	dbra	%d7,cr2
+	bra.s	crnext
+cr3:	movem.l	%d0-%d5,(%a0)
+	lea	160(%a0),%a0
+	dbra	%d7,cr3
+	bra.s	crnext
+cr4:	movem.l	%d0-%d5,(%a0)
+	movem.l	%d0-%d1,24(%a0)
+	lea	160(%a0),%a0
+	dbra	%d7,cr4
+	bra.s	crnext
+crwide:	move.l	#160,%a1			| more than four groups: generic loop
+	move.l	%d6,%d3
+	addq.l	#1,%d3
+	lsl.l	#3,%d3
+	sub.l	%d3,%a1
+1:	move.w	%d6,%d2
+2:	move.l	%d0,(%a0)+
+	move.l	%d0,(%a0)+
+	dbra	%d2,2b
+	add.l	%a1,%a0
+	dbra	%d7,1b
+crnext:
+	cmp.l	%a4,%a3
+	bcs.w	crloop
+crdone:
+	movem.l	(%sp)+,%d2-%d7/%a2-%a4
+	rts
+
 | Closed polygon outline, or open polyline, in one bitplane of a low-resolution screen.
 | void st_draw_poly_plane(unsigned char *buf, const short *points, long count, long plane_offset)
 | void st_draw_polyline(unsigned char *buf, const short *points, long count, long plane_offset)
