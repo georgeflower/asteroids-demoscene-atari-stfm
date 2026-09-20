@@ -22,6 +22,29 @@ extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long 
 extern void st_draw_polyline(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_pair(unsigned char *buffer, long x, long y, long plane_offset);
 extern void st_clear_rects(unsigned char *buffer, const short *rects, long count);
+extern void st_draw_poly_m3(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m3(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m5(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m5(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m6(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m6(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m7(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m7(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m9(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m9(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m10(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m10(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m11(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m11(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m12(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m12(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m13(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m13(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m14(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m14(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m15(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m15(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_plot_points(unsigned char *buffer, const short *points, long count, long color);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
 
 static unsigned char buffer_a[SCREEN_BYTES + 2];
@@ -117,6 +140,102 @@ static void test_clear_rects(void) {
         ++checks;
         if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
             report("clear_rects vs clear_rect", trial);
+        }
+    }
+}
+
+/* The one-pass drawers for colours on several bitplanes must match the four-plane line drawer edge by edge. */
+typedef void (*MultiDrawer)(unsigned char *buffer, const short *points, long count, long plane_offset);
+
+static void test_multi_plane(void) {
+    static const int colours[11] = {3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15};
+    static const MultiDrawer polygons[11] = {st_draw_poly_m3, st_draw_poly_m5, st_draw_poly_m6, st_draw_poly_m7, st_draw_poly_m9, st_draw_poly_m10, st_draw_poly_m11, st_draw_poly_m12, st_draw_poly_m13, st_draw_poly_m14, st_draw_poly_m15};
+    static const MultiDrawer polylines[11] = {st_draw_polyline_m3, st_draw_polyline_m5, st_draw_polyline_m6, st_draw_polyline_m7, st_draw_polyline_m9, st_draw_polyline_m10, st_draw_polyline_m11, st_draw_polyline_m12, st_draw_polyline_m13, st_draw_polyline_m14, st_draw_polyline_m15};
+    int trial;
+
+    for (trial = 0; trial < 1100; ++trial) {
+        const int which = trial % 11;
+        short points[24];
+        const int count = 2 + (int) rand_below(10);
+        const int spread = (trial % 3 == 0) ? 12 : 150;
+        const int closed = (trial / 11) & 1;
+        int index;
+
+        for (index = 0; index < count; ++index) {
+            points[index * 2] = (short) (150 + (int) rand_below((unsigned) spread * 2) - spread);
+            points[index * 2 + 1] = (short) (100 + (int) rand_below((unsigned) (spread < 100 ? spread * 2 : 190)) - (spread < 100 ? spread : 95));
+        }
+        memset(buffer_a, 0, sizeof(buffer_a));
+        memset(buffer_b, 0, sizeof(buffer_b));
+        {
+            int plane;
+
+            if (closed) {
+                polygons[which](buffer_a, points, count, 0);
+            } else {
+                polylines[which](buffer_a, points, count, 0);
+            }
+            for (plane = 0; plane < 4; ++plane) {
+                if ((colours[which] >> plane) & 1) {
+                    if (closed) {
+                        st_draw_poly_plane(buffer_b, points, count, plane * 2);
+                    } else {
+                        st_draw_polyline(buffer_b, points, count, plane * 2);
+                    }
+                }
+            }
+        }
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            int first = -1;
+            int diffs = 0;
+            int at;
+
+            for (at = 0; at < SCREEN_BYTES; ++at) {
+                if (buffer_a[at] != buffer_b[at]) {
+                    ++diffs;
+                    if (first < 0) {
+                        first = at;
+                    }
+                }
+            }
+            if (failures < 3) {
+                printf("colour %d closed %d count %d: %d bytes differ, first at %d (a=%02x b=%02x)\n", colours[which], closed, count, diffs, first, buffer_a[first], buffer_b[first]);
+            }
+            report(closed ? "multi-plane polygon, colour" : "multi-plane polyline, colour", colours[which]);
+        }
+    }
+}
+
+/* Plotting a list of stars must match st_plot_point for every point inside the playing field and skip the rest. */
+static void test_plot_points(void) {
+    int trial;
+
+    for (trial = 0; trial < 300; ++trial) {
+        short points[24];
+        const int count = 1 + (int) rand_below(12);
+        const int color = (int) rand_below(16);
+        int index;
+        int fill;
+
+        for (fill = 0; fill < SCREEN_BYTES; ++fill) {
+            buffer_a[fill] = (unsigned char) (fill * 3 + trial);
+            buffer_b[fill] = buffer_a[fill];
+        }
+        for (index = 0; index < count; ++index) {
+            points[index * 2] = (short) rand_below(WIDTH);
+            points[index * 2 + 1] = (short) rand_below(HEIGHT);
+        }
+        st_plot_points(buffer_a, points, count, color);
+        for (index = 0; index < count; ++index) {
+            if (points[index * 2] >= 16 && points[index * 2] <= 303 && points[index * 2 + 1] >= 16 &&
+                points[index * 2 + 1] <= 191) {
+                st_plot_point(buffer_b, points[index * 2], points[index * 2 + 1], color);
+            }
+        }
+        ++checks;
+        if (memcmp(buffer_a, buffer_b, SCREEN_BYTES) != 0) {
+            report("plot_points, colour", color);
         }
     }
 }
@@ -384,6 +503,8 @@ int main(void) {
     test_polygons();
     test_polyline();
     test_pair();
+    test_plot_points();
+    test_multi_plane();
     test_clear_rects();
     test_plane_matches_four_plane_drawer();
     test_clear_rect();

@@ -328,6 +328,7 @@ typedef struct GameRenderer {
     GamePointDrawer points;
     GameOffsetPolygonDrawer polygon_offsets;
     GameRocksDrawer rocks;
+    uint8_t low_detail;   /* nonzero when the machine is struggling: leave out what can be left out (the stars) */
 } GameRenderer;
 
 /* The field rectangle is where the world is drawn on the screen. The game starts on the title screen. */

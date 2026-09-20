@@ -44,6 +44,11 @@ void platform_end_frame(void);
 void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1);
 int platform_take_elapsed_frames(void);
 
+/* Pacing: the number of vertical blanks each frame is currently held for (1 = 50 fps, 2 = 25 fps ...), chosen from
+   how long frames take, with hysteresis so that the speed does not flap. F1 switches it off; the setter is for tests. */
+int platform_pace_cadence(void);
+void platform_set_pace_lock(int locked);
+
 /* Write one YM2149 register (for the sound engine). */
 void platform_sound_write(uint8_t reg, uint8_t value);
 

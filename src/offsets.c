@@ -4,6 +4,7 @@
  * in the assembler output as `->NAME #value`, which the Makefile turns into `.set NAME, value`.
  */
 #include "game.h"
+#include "platform.h"
 
 #include <stddef.h>
 
@@ -38,6 +39,10 @@ void layout(void) {
     DEF(GA_DRAW_CACHE_VALID, offsetof(GameAsteroid, draw_cache_valid));
     DEF(GA_DRAW_CACHE, offsetof(GameAsteroid, draw_cache));
     DEF(GA_RENDER_PENDING, offsetof(GameAsteroid, render_pending));
+    DEF(FIELD_X0, PLATFORM_FIELD_X);
+    DEF(FIELD_Y0, PLATFORM_FIELD_Y);
+    DEF(FIELD_W, PLATFORM_FIELD_WIDTH);
+    DEF(FIELD_H, PLATFORM_FIELD_HEIGHT);
     DEF(GA_SHAPE, offsetof(GameAsteroid, shape));
     DEF(ROCK_SHAPE_BITS, GAME_ROCK_SHAPE_BITS);
     DEF(ROCK_ORIENT_BITS, GAME_ROCK_ORIENT_BITS);

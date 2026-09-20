@@ -34,6 +34,29 @@
 
 extern void st_clear_buffer(unsigned char *buffer);
 extern void st_draw_line_low(unsigned char *buffer, long x0, long y0, long x1, long y1, long color);
+extern void st_draw_poly_m3(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m3(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m5(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m5(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m6(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m6(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m7(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m7(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m9(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m9(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m10(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m10(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m11(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m11(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m12(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m12(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m13(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m13(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m14(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m14(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_poly_m15(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_draw_polyline_m15(unsigned char *buffer, const short *points, long count, long plane_offset);
+extern void st_plot_points(unsigned char *buffer, const short *points, long count, long color);
 extern void st_draw_pair(unsigned char *buffer, long x, long y, long plane_offset);
 extern void st_draw_polyline(unsigned char *buffer, const short *points, long count, long plane_offset);
 extern void st_draw_line_plane(unsigned char *buffer, long x0, long y0, long x1, long y1, long plane_offset);
@@ -41,6 +64,7 @@ extern void st_draw_poly_plane(unsigned char *buffer, const short *points, long 
 extern void st_draw_rock(unsigned char *buffer, long cx, long cy, const short *cache, long plane_offset);
 extern void st_clear_rects(unsigned char *buffer, const short *rects, long count);
 extern void st_clear_rect(unsigned char *buffer, long group0, long group1, long y0, long y1);
+static void pace_poll_key(void);
 extern void st_ikbd_install(void);
 extern void st_ikbd_remove(void);
 
@@ -69,6 +93,8 @@ static DirtyRect dirty_rects[2][MAX_DIRTY_RECTS];
 static int dirty_count[2];
 static unsigned char dirty_full[2];
 static uint32_t last_frame_clock;
+static uint32_t pace_work_start;   /* see the pacing section below */
+static uint32_t pace_last_flip;
 static long saved_ssp;
 static int entered_supervisor;
 
@@ -146,6 +172,8 @@ static void enter_video(void) {
     wait_vbl();
     set_palette();
     last_frame_clock = ST_FRCLOCK - 1;
+    pace_last_flip = ST_FRCLOCK;
+    pace_work_start = ST_HZ200;
 }
 
 int platform_init(void) {
@@ -217,6 +245,7 @@ void platform_poll_input(GameInput *input) {
     input->start = (uint8_t) (st_key_state[0x39u] || st_key_state[0x1cu]);       /* space, return */
     input->pause = st_key_state[0x19u];                                          /* P */
     input->exit_requested = (uint8_t) (st_key_state[0x10u] || st_key_state[0x01u]);   /* Q, Esc */
+    pace_poll_key();
 }
 
 void platform_begin_frame(void) {
@@ -462,6 +491,16 @@ static long plane_offset_for(uint8_t color) {
     return (color == 1) ? 0 : (color == 2) ? 2 : (color == 4) ? 4 : 6;
 }
 
+/* Polygon and polyline drawers by colour: one bitplane, or one pass over several (see st_video.S). */
+typedef void (*PolyDrawer)(unsigned char *buffer, const short *points, long count, long plane_offset);
+static const PolyDrawer poly_drawers[16] = {0, st_draw_poly_plane, st_draw_poly_plane, st_draw_poly_m3, st_draw_poly_plane, st_draw_poly_m5, st_draw_poly_m6, st_draw_poly_m7, st_draw_poly_plane, st_draw_poly_m9, st_draw_poly_m10, st_draw_poly_m11, st_draw_poly_m12, st_draw_poly_m13, st_draw_poly_m14, st_draw_poly_m15};
+static const PolyDrawer polyline_drawers[16] = {0, st_draw_polyline, st_draw_polyline, st_draw_polyline_m3, st_draw_polyline, st_draw_polyline_m5, st_draw_polyline_m6, st_draw_polyline_m7, st_draw_polyline, st_draw_polyline_m9, st_draw_polyline_m10, st_draw_polyline_m11, st_draw_polyline_m12, st_draw_polyline_m13, st_draw_polyline_m14, st_draw_polyline_m15};
+
+/* what the drawers take as plane offset: the plane for a one-plane colour, none for the others */
+static long plane_argument(uint8_t color) {
+    return (color == 1 || color == 2 || color == 4 || color == 8) ? plane_offset_for(color) : 0;
+}
+
 void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t color) {
     long cx0 = x0;
     long cy0 = y0;
@@ -482,6 +521,14 @@ void platform_draw_line(void *context, int x0, int y0, int x1, int y1, uint8_t c
         } else {
             st_draw_line_plane(draw_buffer, cx0, cy0, cx1, cy1, plane_offset_for(color));
         }
+    } else if (color >= 1 && color <= 15) {
+        short ends[4];
+
+        ends[0] = (short) cx0;
+        ends[1] = (short) cy0;
+        ends[2] = (short) cx1;
+        ends[3] = (short) cy1;
+        polyline_drawers[color](draw_buffer, ends, 2, 0);
     } else {
         st_draw_line_low(draw_buffer, cx0, cy0, cx1, cy1, color);
     }
@@ -538,9 +585,9 @@ void platform_draw_polygon_offsets(void *context, int center_x, int center_y, co
 void platform_draw_polygon(void *context, const int16_t *points, int count, uint8_t color) {
     int index;
 
-    if ((color == 1 || color == 2 || color == 4 || color == 8) && count <= POLYGON_MAX_POINTS) {
+    if (color >= 1 && color <= 15 && count <= POLYGON_MAX_POINTS) {
         uint8_t inside[POLYGON_MAX_POINTS];
-        const long plane = plane_offset_for(color);
+        const long plane = plane_argument(color);
         int outside_points = 0;
         int run_start = -1;
 
@@ -551,7 +598,7 @@ void platform_draw_polygon(void *context, const int16_t *points, int count, uint
             outside_points += !inside[index];
         }
         if (outside_points == 0) {
-            st_draw_poly_plane(draw_buffer, points, count, plane);
+            poly_drawers[color](draw_buffer, points, count, plane);
             return;
         }
 
@@ -565,14 +612,14 @@ void platform_draw_polygon(void *context, const int16_t *points, int count, uint
                 continue;
             }
             if (run_start >= 0) {
-                st_draw_polyline(draw_buffer, points + run_start * 2, index - run_start + 1, plane);
+                polyline_drawers[color](draw_buffer, points + run_start * 2, index - run_start + 1, plane);
                 run_start = -1;
             }
             platform_draw_line(context, points[index * 2], points[index * 2 + 1], points[index * 2 + 2],
                                points[index * 2 + 3], color);
         }
         if (run_start >= 0) {
-            st_draw_polyline(draw_buffer, points + run_start * 2, count - run_start, plane);
+            polyline_drawers[color](draw_buffer, points + run_start * 2, count - run_start, plane);
         }
         platform_draw_line(context, points[(count - 1) * 2], points[(count - 1) * 2 + 1], points[0], points[1], color);
         return;
@@ -587,14 +634,8 @@ void platform_draw_polygon(void *context, const int16_t *points, int count, uint
 }
 
 void platform_draw_points(void *context, const int16_t *points, int count, uint8_t color) {
-    int index;
-
     (void) context;
-    for (index = 0; index < count; ++index) {
-        if (inside_field(points[index * 2], points[index * 2 + 1])) {
-            st_plot_point(draw_buffer, points[index * 2], points[index * 2 + 1], color);
-        }
-    }
+    st_plot_points(draw_buffer, points, count, color);
 }
 
 void platform_draw_text(void *context, int x, int y, const char *text, uint8_t fg, uint8_t bg, uint8_t scale) {
@@ -602,16 +643,111 @@ void platform_draw_text(void *context, int x, int y, const char *text, uint8_t f
     st_text_draw(draw_buffer, x, y, text, fg, bg, scale);
 }
 
+/* ---- pacing ----
+ * A frame that takes a little more than 20 ms gets shown for two vertical blanks, one that takes a little less
+ * for one, so a load near the limit makes the speed flap between 50 and 25 fps. Instead the number of blanks per
+ * frame (the cadence) is chosen from how long frames take and only lowered again after a second of easier
+ * frames, and every frame is held for that many blanks. F1 switches this off (frames are then shown as soon as
+ * they are ready) and on again. */
+#define PACE_MARGIN_MS 2
+#define PACE_HICCUP_MS 120
+#define PACE_RELAX_FRAMES 50
+#define PACE_MESSAGE_FRAMES 100
+
+static int pace_locked = 1;
+static int pace_cadence = 1;
+static int pace_easy_frames;
+static uint32_t pace_average_ms = 10;
+static int pace_message_frames;
+static int pace_f1_was_down;
+
+int platform_pace_cadence(void) {
+    return pace_cadence;
+}
+
+void platform_set_pace_lock(int locked) {
+    pace_locked = locked;
+    pace_cadence = 1;
+    pace_easy_frames = 0;
+    pace_average_ms = 10;
+    pace_work_start = ST_HZ200;
+    pace_last_flip = ST_FRCLOCK;
+}
+
+/* Called once a frame with the time the work took; picks the cadence (blanks per frame). */
+static void pace_update(uint32_t work_ms) {
+    int needed;
+
+    if (work_ms > PACE_HICCUP_MS) {
+        return;   /* a disk write or the like, not what frames cost: do not let it move the cadence */
+    }
+    pace_average_ms = (pace_average_ms * 3u + work_ms) / 4u;
+    needed = (int) ((pace_average_ms + PACE_MARGIN_MS + 19u) / 20u);
+    if (needed < 1) {
+        needed = 1;
+    }
+    if (needed > 4) {
+        needed = 4;
+    }
+    if (needed > pace_cadence) {
+        pace_cadence = needed;
+        pace_easy_frames = 0;
+    } else if (needed < pace_cadence) {
+        if (++pace_easy_frames >= PACE_RELAX_FRAMES) {
+            --pace_cadence;
+            pace_easy_frames = 0;
+        }
+    } else {
+        pace_easy_frames = 0;
+    }
+}
+
+/* F1 toggles the lock; the state is shown for a couple of seconds in the frame below the field. */
+static void pace_poll_key(void) {
+    const int down = st_key_state[0x3bu] != 0;
+
+    if (down && !pace_f1_was_down) {
+        pace_locked = !pace_locked;
+        pace_message_frames = PACE_MESSAGE_FRAMES;
+    }
+    pace_f1_was_down = down;
+}
+
+static void pace_draw_message(void) {
+    if (pace_message_frames > 0) {
+        st_text_draw(draw_buffer, 8, 192, pace_locked ? "F1 PACING: STEADY   " : "F1 PACING: FREE     ", 2,
+                     GAME_COLOR_FRAME, 1);
+        --pace_message_frames;
+        if (pace_message_frames == 0) {
+            pace_message_frames = -2;   /* blank it on both screen buffers */
+        }
+    } else if (pace_message_frames < 0) {
+        st_text_draw(draw_buffer, 8, 192, "                   ", GAME_COLOR_FRAME, GAME_COLOR_FRAME, 1);
+        ++pace_message_frames;
+    }
+}
+
 void platform_end_frame(void) {
     unsigned char *finished = draw_buffer;
+    const uint32_t work_ticks = ST_HZ200 - pace_work_start;
+
+    pace_update(work_ticks * 5u);
+    pace_draw_message();
 
     /* The ST only reloads the screen address at the vertical blank, so the old
        page stays on screen until then: request the flip, wait for the blank that
        carries it out, and only then draw into the page that was on screen. */
     show_screen(finished);
     wait_vbl();
+    if (pace_locked) {
+        while ((int32_t) (ST_FRCLOCK - (pace_last_flip + (uint32_t) pace_cadence)) < 0) {
+            wait_vbl();
+        }
+    }
+    pace_last_flip = ST_FRCLOCK;
     draw_buffer = show_buffer;
     show_buffer = finished;
+    pace_work_start = ST_HZ200;
 }
 
 /* Register select and data write must not be split by an interrupt (TOS also uses the chip for floppy select). */
@@ -710,6 +846,14 @@ void platform_mark_dirty(void *context, int x0, int y0, int x1, int y1) {
 
 int platform_take_elapsed_frames(void) {
     return 1;
+}
+
+int platform_pace_cadence(void) {
+    return 1;
+}
+
+void platform_set_pace_lock(int locked) {
+    (void) locked;
 }
 
 void platform_sound_write(uint8_t reg, uint8_t value) {

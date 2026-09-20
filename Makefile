@@ -20,7 +20,7 @@ ASM_INC := $(BUILD_DIR)/asm_offsets.inc
 ATARI_OBJS := $(ATARI_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o) $(ATARI_ASMS:$(SRC_DIR)/%.S=$(BUILD_DIR)/%.o)
 TEST_SRCS := $(TEST_DIR)/game_tests.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c
 
-.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari test-poly-atari test-rocks-atari screens-atari enemies-atari micro-atari prof-atari bench-atari host-sanity clean
+.PHONY: all atari-st disk-image test test-atari test-gfx-atari test-keys-atari test-sound-atari test-poly-atari test-rocks-atari test-pace-atari screens-atari enemies-atari micro-atari boss-bench-atari prof-atari bench-atari host-sanity clean
 
 all: atari-st disk-image
 
@@ -62,7 +62,7 @@ test-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_SRCS) $(SRC_DIR)/st_step.S $(LDFLAGS) -o $(BUILD_DIR)/GAMETEST.PRG
 
 # Pixel-exact checks of the assembly drawing routines (run in Hatari).
-test-gfx-atari: $(BUILD_DIR)
+test-gfx-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_gfx_test.c $(SRC_DIR)/st_video.S $(SRC_DIR)/st_text.c $(LDFLAGS) -o $(BUILD_DIR)/GFXTEST.PRG
 
 # Keyboard diagnostic: logs which keys reach the game (run in Hatari, read C:\KEYTEST.LOG).
@@ -71,6 +71,9 @@ test-poly-atari: $(BUILD_DIR) $(ASM_INC)
 
 test-rocks-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_rocks_test.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/ROCKTEST.PRG
+
+test-pace-atari: $(BUILD_DIR) $(ASM_INC)
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_pace_test.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/game.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/PACETEST.PRG
 
 test-keys-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_key_test.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/KEYTEST.PRG
@@ -86,6 +89,10 @@ screens-atari: $(BUILD_DIR) $(ASM_INC)
 # Line-up of every enemy and the four bosses (run in Hatari, take screenshots).
 enemies-atari: $(BUILD_DIR) $(ASM_INC)
 	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_enemies.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/ENEMIES.PRG
+
+# Frame cost with each boss and a line-up of every enemy on screen (C:\BOSS.LOG).
+boss-bench-atari: $(BUILD_DIR) $(ASM_INC)
+	$(CC) $(CFLAGS) -DATARI_ST_TARGET $(TEST_DIR)/atari_boss_bench.c $(SRC_DIR)/game.c $(SRC_DIR)/platform_atari_st.c $(SRC_DIR)/st_text.c $(SRC_DIR)/sound.c $(ATARI_ASMS) $(LDFLAGS) -o $(BUILD_DIR)/BOSSBENCH.PRG
 
 # Timings of the drawing primitives (run in Hatari, results in C:\MICRO.LOG).
 micro-atari: $(BUILD_DIR) $(ASM_INC)

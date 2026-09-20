@@ -47,6 +47,7 @@ The implementation direction was adjusted using the `Atari_ST_Sources` archive a
 - left arrow or `A`: rotate left
 - right arrow or `D`: rotate right
 - up arrow or `W`: thrust
+- `F1`: switch the frame pacing (steady / free) on and off
 - `Space`: fire (also starts a game and confirms on the menus)
 - `H`: hyperspace
 - `P`: pause
@@ -85,6 +86,8 @@ Because the target is a 68000, the tests also run *as Atari programs* inside Hat
 make test-atari         # build/GAMETEST.PRG: game logic (waves, scoring, physics, hyperspace, high scores, screens, dirty rectangles)
 make test-gfx-atari     # build/GFXTEST.PRG: assembly drawing routines and the text drawer compared pixel for pixel with references
 make test-poly-atari    # build/POLYTEST.PRG: polygons partly outside the field and cached rock outlines compared with edge-by-edge drawing (C:\POLYTEST.LOG)
+make test-pace-atari    # build/PACETEST.PRG: the frame pacing on frames of chosen lengths (C:\\PACETEST.LOG)
+make boss-bench-atari   # build/BOSSBENCH.PRG: ms per frame with each boss and a line-up of every enemy (C:\\BOSS.LOG)
 make test-rocks-atari   # build/ROCKTEST.PRG: the assembly rocks loop against the C route on random rock populations, screens and dirty rectangles must match (C:\ROCKTEST.LOG)
 make bench-atari        # build/GAMEBENCH.PRG: milliseconds per frame for several rock populations, split into step / render maths / erase / draw
 make micro-atari        # build/MICRO.PRG: cycles per call of the drawing primitives and the fixed cost of a frame (C:\MICRO.LOG)
@@ -101,17 +104,20 @@ Performance measured in Hatari (cycle-exact 8 MHz ST, TOS 1.04) with `make bench
 
 | rocks | ms/frame |
 |---|---|
-| 6 large (start of a game) | 15 (22 before any speed-up) |
-| 12 large (worst case for size) | 24 (36) |
-| 4 large, 8 medium, 12 small (a level 4 a while in) | 27 (34 with the C rock loop and drawing) |
-| 6 large, 10 medium, 24 small (crowded, 40 rocks) | 41 (53) |
-| 12 large, all poking out over the border | 34 (37 with the C border route) |
+| 6 large (start of a game) | 10 (22 before any speed-up, 15 with the assembly loop) |
+| 4 large, 8 medium, 12 small (a level 4 a while in) | 15.5 (34, 27) |
+| 5 large, 8 medium, 14 small (27 rocks, the most there can be) | 19 |
+| 12 large, all poking out over the border | 31 |
 
-The frame is drawn once per two blanks whenever it takes more than 20 ms, so the early waves run at 50 fps, busier ones at 25 fps and the very crowded ones at 17 fps; the game keeps its speed by stepping once per elapsed blank. What the time goes to (from the profiler): drawing the rock outlines (about 45 %), erasing the old ones, the per-rock render maths and dirty rectangles, and the game step.
+Bosses, without rocks (`make boss-bench-atari`): 20-27 ms, were 26-36 ms.
 
-Speed-ups so far: a polygon drawer that carries on from the previous edge instead of setting each edge up again; rocks prepared once per orientation (edge list in `GameAsteroid.draw_cache`, drawn by `st_draw_rock`); border clipping with `muls`/`divs` instead of the 32-bit library divide; two-pixel bullets drawn by a dedicated routine; small and medium rocks drawn with 6 and 8 corners; the HUD redrawn field by field (and its digits without divisions); collision loops that only visit the rocks in play.
+A frame that takes more than 20 ms is shown for two vertical blanks (25 fps). To keep that from flapping between 50 and 25 fps when the load sits near the limit, the number of blanks per frame is chosen from how long frames take and only lowered again after a second of easier ones (`platform_pace_cadence`; `make test-pace-atari` checks it). `F1` switches this pacing off and on again, with a message below the field. At 3 blanks or more the stars are left out. The game keeps its speed by stepping once per elapsed blank.
 
-The per-rock render loop is in assembly (`src/st_rocks.S`, called through the optional `GameRenderer.rocks` hook): it works out each rock's screen position, keeps its cached outline up to date, reports its dirty rectangle and draws it. Rocks that poke out over the border are drawn by `st_draw_border_rock` (runs of inside edges, and the crossing edges clipped Cohen-Sutherland style); `render_pending` remains as the way a drawer can hand a rock back to the C route. The assembly reads `GameState`/`GameAsteroid` fields through byte offsets that the compiler works out (`src/offsets.c` -> `build/asm_offsets.inc`), so changing those structs needs no hand-edited constants. The dirty-rectangle erase (`st_clear_rects`) and the hot loops of the game step (`src/st_step.S`: moving/wrapping rocks and bullets, and the bullet-versus-rock hit search) are in assembly too; the C versions (`game_update_rocks_ref` and friends) are what host builds use and what the game tests compare the assembly with. Tag `v1.0` is the last version with the all-C rock loop.
+Rocks are drawn like the arcade original: each size has 8 shared outlines (`game_rock_shape`) and they no longer spin (`GAME_ROCK_ORIENT_BITS` in `game.h` allows coarse rotation steps if you want them back, at 64 KB more per doubling). For every size, outline and x offset within a 16-pixel group the platform generates at startup (about 1.2 s, "PREPARING ROCKS") a tiny routine of `ori.w #mask,offset(a0)` for exactly the words the outline touches (`platform_build_rock_sprites`, 64 KB), so drawing a rock is one `jsr`. Rocks that poke over the border, or that have an outline of their own, use the line drawer. At most 27 rocks are in play, as in the arcade.
+
+Other speed-ups: a polygon drawer that carries on from the previous edge instead of setting each edge up again; rocks prepared once per orientation (edge list in `GameAsteroid.draw_cache`, drawn by `st_draw_rock`); border clipping with `muls`/`divs` instead of the 32-bit library divide; two-pixel bullets drawn by a dedicated routine; small and medium rocks drawn with 6 and 8 corners; the HUD redrawn field by field (and its digits without divisions); collision loops that only visit the rocks in play.
+
+The per-rock render loop is in assembly (`src/st_rocks.S`, called through the optional `GameRenderer.rocks` hook): it works out each rock's screen position, keeps its cached outline up to date, reports its dirty rectangle and draws it. Rocks that poke out over the border are drawn by `st_draw_border_rock` (runs of inside edges, and the crossing edges clipped Cohen-Sutherland style); `render_pending` remains as the way a drawer can hand a rock back to the C route. The assembly reads `GameState`/`GameAsteroid` fields through byte offsets that the compiler works out (`src/offsets.c` -> `build/asm_offsets.inc`), so changing those structs needs no hand-edited constants. The dirty-rectangle erase (`st_clear_rects`) and the hot loops of the game step (`src/st_step.S`: moving/wrapping rocks and bullets, and the bullet-versus-rock hit search) are in assembly too; the C versions (`game_update_rocks_ref` and friends) are what host builds use and what the game tests compare the assembly with. Colours that use several bitplanes (enemies, bosses, power-ups) are drawn in one pass by copies of the polygon drawer generated per colour (`POLYMULTI` in `st_video.S`), the stars by `st_plot_points`. Tag `v1.0` is the last version with the all-C rock loop.
 
 ## Running on real hardware
 

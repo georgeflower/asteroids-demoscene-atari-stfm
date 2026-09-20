@@ -67,6 +67,13 @@ int main(void) {
     memset(state.asteroids, 0, sizeof(state.asteroids));
     state.wave = (uint8_t) (PROF_WAVE - 1);
     state.rng_state = 12345;
+#ifdef PROF_BOSS
+    state.wave = (uint8_t) (PROF_BOSS * 5 - 1);
+    game_step(&state, &input);
+    state.boss.entered = 1;
+    state.boss.y = state.boss.target_y;
+    state.banner_timer = 0;
+#endif
 #ifdef PROF_ENEMIES
     state.ufo_timer = 30;
     state.alien_timer = 40;

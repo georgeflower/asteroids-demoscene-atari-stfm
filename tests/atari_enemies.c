@@ -43,6 +43,7 @@ int main(void) {
     renderer.points = platform_draw_points;
     renderer.polygon_offsets = platform_draw_polygon_offsets;
     renderer.rocks = platform_draw_rocks;
+    renderer.low_detail = 0;
 
     if (!platform_init()) {
         return 1;

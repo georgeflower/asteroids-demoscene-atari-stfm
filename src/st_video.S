@@ -1,3 +1,4 @@
+#include "asm_offsets.inc"
 	.text
 	.globl	_st_clear_buffer
 _st_clear_buffer:
@@ -285,6 +286,160 @@ polydone:
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
+| The same polygon / polyline drawer for colours that use several bitplanes: one pass, with an ori per
+| set plane at a fixed displacement (planes = the colour number, bit p = plane p at 2 * p bytes). Entered like
+| st_draw_poly_plane / st_draw_polyline with plane_offset 0; there is one copy per colour 3, 5, 6, 7, 9 .. 15.
+	.macro	PLOTPX planes
+	.if \planes & 1
+	or.w	%d0,(%a0)
+	.endif
+	.if \planes & 2
+	or.w	%d0,2(%a0)
+	.endif
+	.if \planes & 4
+	or.w	%d0,4(%a0)
+	.endif
+	.if \planes & 8
+	or.w	%d0,6(%a0)
+	.endif
+	.endm
+
+	.macro	POLYMULTI sfx, planes
+	.globl	_st_draw_poly_m\sfx
+_st_draw_poly_m\sfx:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	56(%sp),%d5
+	beq.w	polydone\sfx
+	subq.w	#1,%d5			| d5 = edges - 1, for dbra
+	bra.s	polyentry\sfx
+	.globl	_st_draw_polyline_m\sfx
+_st_draw_polyline_m\sfx:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	56(%sp),%d5
+	beq.w	polydone\sfx
+	subq.w	#2,%d5
+polyentry\sfx:
+	move.l	48(%sp),%a2
+	add.l	60(%sp),%a2		| a2 = buffer + plane offset
+	move.l	52(%sp),%a3		| a3 = current point
+	move.l	%a3,%a5			| a5 = first point (to close the outline)
+	move.l	56(%sp),%d0
+	lsl.l	#2,%d0
+	lea	0(%a3,%d0.l),%a4	| a4 = end of the point list
+	move.w	(%a3),%d3		| first pixel
+	move.w	2(%a3),%d6
+	mulu.w	#160,%d6
+	lea	0(%a2,%d6.l),%a0
+	move.w	%d3,%d6
+	lsr.w	#4,%d6
+	lsl.w	#3,%d6
+	adda.w	%d6,%a0
+	moveq	#15,%d6
+	and.w	%d3,%d6
+	move.w	#0x8000,%d0
+	lsr.w	%d6,%d0			| pixel mask
+	PLOTPX	\planes
+	tst.w	%d5
+	bmi.w	polydone\sfx
+edge\sfx:
+	lea	4(%a3),%a6		| next point, wrapping to the first
+	cmp.l	%a4,%a6
+	bcs.s	1f
+	move.l	%a5,%a6
+1:	move.w	(%a6),%d1
+	sub.w	(%a3),%d1		| dx
+	move.w	2(%a6),%d2
+	sub.w	2(%a3),%d2		| dy
+	movea.w	#160,%a1
+	tst.w	%d2
+	bpl.s	2f
+	neg.w	%d2
+	movea.w	#-160,%a1
+2:	moveq	#0,%d4
+	tst.w	%d1
+	bpl.s	3f
+	neg.w	%d1
+	moveq	#1,%d4
+3:	cmp.w	%d2,%d1
+	bcs.w	ymajor\sfx
+	move.w	%d1,%d7			| steps along x
+	beq.w	edgedone\sfx		| no steps (a zero-length edge)
+	move.w	%d1,%d3
+	lsr.w	#1,%d3
+	subq.w	#1,%d7
+	tst.w	%d4
+	bne.s	xleft\sfx
+xright\sfx:
+	sub.w	%d2,%d3
+	bpl.s	4f
+	add.w	%d1,%d3
+	adda.w	%a1,%a0
+4:	ror.w	#1,%d0
+	bcc.s	5f
+	addq.l	#8,%a0
+5:	PLOTPX	\planes
+	dbra	%d7,xright\sfx
+	bra.s	edgedone\sfx
+xleft\sfx:
+	sub.w	%d2,%d3
+	bpl.s	6f
+	add.w	%d1,%d3
+	adda.w	%a1,%a0
+6:	rol.w	#1,%d0
+	bcc.s	7f
+	subq.l	#8,%a0
+7:	PLOTPX	\planes
+	dbra	%d7,xleft\sfx
+	bra.s	edgedone\sfx
+ymajor\sfx:
+	move.w	%d2,%d7			| steps along y
+	move.w	%d2,%d3
+	lsr.w	#1,%d3
+	subq.w	#1,%d7
+	tst.w	%d4
+	bne.s	yleft\sfx
+yright\sfx:
+	sub.w	%d1,%d3
+	bpl.s	8f
+	add.w	%d2,%d3
+	ror.w	#1,%d0
+	bcc.s	8f
+	addq.l	#8,%a0
+8:	adda.w	%a1,%a0
+	PLOTPX	\planes
+	dbra	%d7,yright\sfx
+	bra.s	edgedone\sfx
+yleft\sfx:
+	sub.w	%d1,%d3
+	bpl.s	9f
+	add.w	%d2,%d3
+	rol.w	#1,%d0
+	bcc.s	9f
+	subq.l	#8,%a0
+9:	adda.w	%a1,%a0
+	PLOTPX	\planes
+	dbra	%d7,yleft\sfx
+edgedone\sfx:
+	addq.l	#4,%a3
+	dbra	%d5,edge\sfx
+polydone\sfx:
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+	.endm
+
+	POLYMULTI 3, 3
+	POLYMULTI 5, 5
+	POLYMULTI 6, 6
+	POLYMULTI 7, 7
+	POLYMULTI 9, 9
+	POLYMULTI 10, 10
+	POLYMULTI 11, 11
+	POLYMULTI 12, 12
+	POLYMULTI 13, 13
+	POLYMULTI 14, 14
+	POLYMULTI 15, 15
+
+
 | A rock outline from a prepared edge list (see build_rock_cache in platform_atari_st.c), all inside the screen.
 | void st_draw_rock(unsigned char *buf, long cx, long cy, const short *cache, long plane_offset)
 | cache: edges - 1 (-1 for none), x and y offset of the first corner, then per edge six words:
@@ -469,6 +624,67 @@ _st_draw_line_low:
 9:	add.l	%a1,%a0
 	dbra	%d7,8b
 10:	movem.l	(%sp)+,%d2-%d7/%a2
+	rts
+
+| Single pixels of one colour (the stars): every point inside the playing field is set to the colour, the
+| others are skipped. Same result as st_plot_point for each point.
+| void st_plot_points(unsigned char *buf, const short *points, long count, long color)
+	.globl	_st_plot_points
+_st_plot_points:
+	movem.l	%d2-%d6/%a2,-(%sp)		| 24 bytes; arguments from 28(%sp)
+	move.l	28(%sp),%a2
+	move.l	32(%sp),%a1
+	move.l	36(%sp),%d6
+	ble.w	ppdone
+	move.l	40(%sp),%d2
+	subq.w	#1,%d6
+pploop:
+	move.w	(%a1)+,%d3			| x
+	move.w	(%a1)+,%d4			| y
+	move.w	%d3,%d0
+	sub.w	#FIELD_X0,%d0
+	cmp.w	#FIELD_W-1,%d0
+	bhi.s	ppskip
+	move.w	%d4,%d0
+	sub.w	#FIELD_Y0,%d0
+	cmp.w	#FIELD_H-1,%d0
+	bhi.s	ppskip
+	mulu.w	#160,%d4
+	lea	0(%a2,%d4.l),%a0
+	move.w	%d3,%d0
+	lsr.w	#4,%d0
+	lsl.w	#3,%d0
+	adda.w	%d0,%a0				| the 16-pixel group
+	moveq	#15,%d0
+	and.w	%d3,%d0
+	move.w	#0x8000,%d1
+	lsr.w	%d0,%d1				| d1 = the pixel
+	move.w	%d1,%d0
+	not.w	%d0				| d0 = everything but the pixel
+	btst	#0,%d2
+	beq.s	1f
+	or.w	%d1,(%a0)
+	bra.s	2f
+1:	and.w	%d0,(%a0)
+2:	btst	#1,%d2
+	beq.s	3f
+	or.w	%d1,2(%a0)
+	bra.s	4f
+3:	and.w	%d0,2(%a0)
+4:	btst	#2,%d2
+	beq.s	5f
+	or.w	%d1,4(%a0)
+	bra.s	6f
+5:	and.w	%d0,4(%a0)
+6:	btst	#3,%d2
+	beq.s	7f
+	or.w	%d1,6(%a0)
+	bra.s	ppskip
+7:	and.w	%d0,6(%a0)
+ppskip:
+	dbra	%d6,pploop
+ppdone:
+	movem.l	(%sp)+,%d2-%d6/%a2
 	rts
 
 | Two neighbouring pixels (x, y) and (x + 1, y) in one bitplane: what a bullet is. Both must be on the screen.

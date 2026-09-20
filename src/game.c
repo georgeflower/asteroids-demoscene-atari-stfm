@@ -2134,13 +2134,26 @@ static void draw_enemy_bullets(const GameState *state, const GameRenderer *rende
 
 /* ---- bosses ---- */
 
+/* n / d for a quotient that fits 16 bits: one divu.w on the 68000 instead of the 32-bit library division. */
+static inline uint32_t div32_by_16(uint32_t n, uint16_t d) {
+#ifdef ATARI_ST_TARGET
+    uint32_t value = n;
+
+    __asm__ ("divu.w %1,%0\n\tand.l #0xffff,%0" : "+d" (value) : "dm" (d) : "cc");
+    return value;
+#else
+    return n / d;
+#endif
+}
+
 /* An ellipse of the given radii, centred at (cx, cy), as 16 points; `dome` keeps only the upper half. */
 static int ellipse_points(const GameState *state, int cx, int cy, int rx, int ry, int count, int dome, int16_t *points) {
     int index;
     int used = 0;
 
     for (index = 0; index < count; ++index) {
-        const uint16_t angle = (uint16_t) (dome ? 32768u + (uint32_t) index * 32768u / (uint32_t) (count - 1) : (uint32_t) index * 65536u / (uint32_t) count);
+        const uint16_t angle = (uint16_t) (dome ? 32768u + div32_by_16((uint32_t) index * 32768u, (uint16_t) (count - 1))
+                                                 : div32_by_16((uint32_t) index * 65536u, (uint16_t) count));
         const int ox = (int) (mul16((int16_t) rx, (int16_t) trig_cos(angle)) >> 14);
         const int oy = (int) (mul16((int16_t) ry, (int16_t) trig_sin(angle)) >> 14);
 
@@ -2543,7 +2556,9 @@ void game_render(GameState *state, const GameRenderer *renderer) {
     }
 
     if (state->mode == GAME_MODE_PLAYING) {
-        draw_stars(state, renderer);
+        if (!renderer->low_detail) {
+            draw_stars(state, renderer);
+        }
         draw_ship(state, renderer);
         draw_bullets(state, renderer);
         if (renderer->rocks != NULL) {
